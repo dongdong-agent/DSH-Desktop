@@ -9,37 +9,31 @@
     {
       "identifier": "shell:allow-execute",
       "allow": [
-        {
-          "name": "dsh",
-          "sidecar": false,
-          "args": true
-        },
-        {
-          "name": "dsh.cmd",
-          "sidecar": false,
-          "args": true
-        },
-        {
-          "name": "node",
-          "sidecar": false,
-          "args": true
-        },
-        {
-          "name": "npm",
-          "sidecar": false,
-          "args": true
-        },
-        {
-          "name": "winget",
-          "sidecar": false,
-          "args": true
-        }
+        { "name": "node", "cmd": "node", "args": true },
+        { "name": "npm", "cmd": "npm", "args": true },
+        { "name": "winget", "cmd": "winget", "args": true },
+        { "name": "dsh", "cmd": "dsh", "args": true },
+        { "name": "dsh.cmd", "cmd": "dsh.cmd", "args": true }
       ]
     },
+    {
+      "identifier": "shell:allow-spawn",
+      "allow": [
+        { "name": "node", "cmd": "node", "args": true },
+        { "name": "dsh", "cmd": "dsh", "args": true },
+        { "name": "dsh.cmd", "cmd": "dsh.cmd", "args": true }
+      ]
+    },
+    "shell:allow-kill",
+    "shell:allow-stdin-write",
     "fs:default",
     {
       "identifier": "fs:allow-exists",
       "allow": [{ "path": "C:\\Program Files\\nodejs\\**" }, { "path": "C:\\**" }]
+    },
+    {
+      "identifier": "fs:allow-write-text-file",
+      "allow": [{ "path": "C:\\Users\\vista\\AppData\\Local\\Temp\\**" }]
     },
     "dialog:default",
     "http:default",

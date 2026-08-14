@@ -12,8 +12,22 @@
 // ============================================================
 import { Command, type Child } from "@tauri-apps/plugin-shell";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
-import { exists } from "@tauri-apps/plugin-fs";
+import { exists, writeTextFile } from "@tauri-apps/plugin-fs";
 import type { EngineHealth } from "./types";
+
+/** 诊断日志（落盘 %TEMP%\dsh-spawn.log；WebView console 不输出到终端，靠文件看错误） */
+const DIAG_LOG = "C:\\Users\\vista\\AppData\\Local\\Temp\\dsh-spawn.log";
+let diagBuf = "";
+function diag(...parts: unknown[]) {
+  diagBuf += `[${new Date().toISOString()}] ${parts.map((p) => (typeof p === "string" ? p : JSON.stringify(p))).join(" ")}\n`;
+  if (diagBuf.length > 20_000) diagBuf = diagBuf.slice(-10_000);
+  try {
+    void writeTextFile(DIAG_LOG, diagBuf).catch(() => {});
+  } catch {
+    /* diag best-effort */
+  }
+  console.log("[dsh-diag]", ...parts);
+}
 
 /** 统一 fetch：Tauri 环境走 plugin-http（无 CORS），浏览器环境回退原生 fetch */
 async function httpFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
@@ -31,23 +45,27 @@ const MAX_START_WAIT_MS = 30_000;
 
 /** pnpm 安装的真实 bin.js（本机东哥路径，MSYS 下 pnpm 把 /c/ 写成 C:\c\，路径自洽） */
 const DSH_BIN_JS =
-  "C:/c/Users/vista/AppData/Local/pnpm/global/5/.pnpm/@deepseek-ai+dsh@0.1.0-rc.6_4b02b31f4347d42e02dd8ae2631af2b2/node_modules/@deepseek-ai/dsh/lib/bin.js";
+  "C:\\c\\Users\\vista\\AppData\\Local\\pnpm\\global\\5\\.pnpm\\@deepseek-ai+dsh@0.1.0-rc.6_4b02b31f4347d42e02dd8ae2631af2b2\\node_modules\\@deepseek-ai\\dsh\\lib\\bin.js";
 
 /** npm 自带 npx-cli.js（新用户零安装兜底：npx --yes @deepseek-ai/dsh 自动下载） */
-const NPX_CLI_JS = "C:/Program Files/nodejs/node_modules/npm/bin/npx-cli.js";
+const NPX_CLI_JS = "C:\\Program Files\\nodejs\\node_modules\\npm\\bin\\npx-cli.js";
 
 /** 候选启动命令（按优先级）：
+ * 直接 spawn 简单命令名（capabilities 的 shell:allow-execute 里用
+ * `cmd` 字段映射绝对路径，如 name=node → C:\Program Files\nodejs\node.exe）。
+ * 注意：不要用 cmd.exe /C 包装——cmd 的引号转义会破坏含空格路径；
+ * 也不要传绝对路径给 Command.create（Tauri 按 name 匹配权限）。
  * 1. node + 本机已装 bin.js（最快，零下载）
- * 2. node + npx-cli.js --yes @deepseek-ai/dsh（新用户开箱：自动下载引擎，仅首次慢）
- * 3. `dsh`（PATH 里的 shim，git-bash 环境下可用）
+ * 2. node + npx-cli.js --yes @deepseek-ai/dsh（新用户开箱：自动下载引擎）
+ * 3. `dsh`（PATH 里的 shim）
  * 4. `dsh.cmd`（npm 的 cmd shim）
  */
-function candidateCommands(args: string[]): Array<string[]> {
+function candidateCommands(args: string[]): Array<[string, string[]]> {
   return [
-    ["node", DSH_BIN_JS, ...args],
-    ["node", NPX_CLI_JS, "--yes", "@deepseek-ai/dsh", ...args],
-    ["dsh", ...args],
-    ["dsh.cmd", ...args],
+    ["node", [DSH_BIN_JS, ...args]],
+    ["node", [NPX_CLI_JS, "--yes", "@deepseek-ai/dsh", ...args]],
+    ["dsh", args],
+    ["dsh.cmd", args],
   ];
 }
 
@@ -202,9 +220,9 @@ export async function findFreePort(start: number): Promise<number> {
 let versionCache: string | null = null;
 export async function getDshVersion(): Promise<string> {
   if (versionCache) return versionCache;
-  for (const cmd of candidateCommands(["--version"])) {
+  for (const [prog, cmdArgs] of candidateCommands(["--version"])) {
     try {
-      const c = Command.create(cmd[0], cmd.slice(1));
+      const c = Command.create(prog, cmdArgs);
       const out = await c.execute();
       const v = out.stdout?.trim() || out.stderr?.trim();
       if (v && /v?\d+\.\d+/.test(v)) {
@@ -249,9 +267,10 @@ export async function startEngine(preferredPort = DEFAULT_PORT): Promise<EngineH
 
   const args = ["--profile", "web", "--port", String(port), "--host", "127.0.0.1"];
 
-  for (const cmd of candidateCommands(args)) {
+  for (const [prog, cmdArgs] of candidateCommands(args)) {
+    diag("尝试候选:", prog, cmdArgs);
     try {
-      const c = Command.create(cmd[0], cmd.slice(1));
+      const c = Command.create(prog, cmdArgs);
       c.stdout.on("data", (line) => {
         console.log("[dsh]", line);
       });
@@ -259,6 +278,7 @@ export async function startEngine(preferredPort = DEFAULT_PORT): Promise<EngineH
         console.error("[dsh]", line);
       });
       child = await c.spawn();
+      diag("spawn 成功:", prog, "pid=", child.pid);
 
       // 等待健康
       const deadline = Date.now() + MAX_START_WAIT_MS;
@@ -270,6 +290,7 @@ export async function startEngine(preferredPort = DEFAULT_PORT): Promise<EngineH
         }
         await new Promise((r) => setTimeout(r, 400));
       }
+      diag("候选超时:", prog);
       // 该候选启动超时：杀掉并试下一个
       try {
         await child.kill();
@@ -278,7 +299,8 @@ export async function startEngine(preferredPort = DEFAULT_PORT): Promise<EngineH
       }
       child = null;
     } catch (e) {
-      console.warn(`[dsh] spawn candidate failed: ${cmd[0]}`, e);
+      diag("spawn 失败:", prog, String(e));
+      console.warn(`[dsh] spawn candidate failed: ${prog}`, e);
     }
   }
 
