@@ -1,74 +1,112 @@
-# DeepSeek Harness Desktop (dsh-desktop)
+# DeepSeek Harness Desktop
 
-高性能桌面 GUI —— 用 OneWork 同款架构（Tauri 2 + React 19 + TS + Vite 6 + Tailwind 4 + Zustand）为 [DeepSeek Harness](https://www.deepseek.com/harness/) 打造的原生桌面客户端。
+> **DSH Desktop** — A native desktop client for [DeepSeek Harness](https://www.deepseek.com/harness/), built with Tauri 2 + React 19. It embeds the official DeepSeek Harness WebUI and manages the local engine for you.
 
-## 核心特性
+<p align="center">
+  <img alt="Platform: Windows" src="https://img.shields.io/badge/platform-Windows%20x64-0078D6?logo=windows&logoColor=white"/>
+  <img alt="Version" src="https://img.shields.io/badge/version-0.1.0-purple"/>
+  <img alt="Built with Tauri" src="https://img.shields.io/badge/Tauri-2.0-24C8D8?logo=tauri&logoColor=white"/>
+  <img alt="React 19" src="https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=white"/>
+  <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-green"/>
+</p>
 
-- **引擎复用，绝不双开**：启动时扫描已有 dsh web 实例（网页版正在跑则直接复用），避免双实例争抢 `~/.dsh` 会话存储
-- **原生协议对接**：HTTP `POST /api/<method>` RPC（`client-request` 信封）+ WebSocket `/api/events.mux`、`/api/events.host` 事件流（自动重连）
-- **四模式切换**：standard（标准）/ code（PTC）/ minimal（极简）/ cordis（创造）
-- **Trajectory 轨迹视图**：按来源查看系统提示词、思维链、工具调用、子代理调度
-- **性能优化**：manualChunks 分包（react-vendor / markdown-render / icons 独立 chunk）、RPC 超时控制、事件流断线重连
+**Read this in other languages:** [简体中文](README.zh-CN.md) · [日本語](README.ja.md) · [한국어](README.ko.md) · [Español](README.es.md) · [Français](README.fr.md) · [Deutsch](README.de.md)
 
-## 技术栈（对齐 OneWork）
+---
 
-| 层 | 选型 |
+## ✨ What is it?
+
+DeepSeek Harness Desktop is a **thin native shell** around the official DeepSeek Harness WebUI. Instead of reinventing the UI, it embeds the official web interface in an `iframe` and adds what a desktop app should have:
+
+- **One-click engine startup** — detects your local environment (`node` + `dsh`), picks a free port, and spawns the engine with the right profile.
+- **Reuse existing instances** — if a DeepSeek Harness web instance is already running on your machine, the app connects to it directly instead of starting a duplicate (no more fighting over `~/.dsh` session storage).
+- **Environment self-check + one-click install** — missing Node.js or the `dsh` engine? The launcher tells you exactly what's missing and can install it for you.
+- **Frameless window** — custom title bar (drag / minimize / maximize / close) and a status bar showing engine state, port, and session count.
+- **Local persistence** — all sessions live on disk under `~/.dsh/sessions/`, so closing the app never loses your work.
+
+Everything else — sessions, trajectories, plugins, agent presets, settings — is the **official DeepSeek Harness WebUI** at its full fidelity, since the app simply hosts it.
+
+## 🚀 Quick start
+
+1. **Download** the latest installer from [Releases](https://github.com/dongdong-agent/DSH-Desktop/releases) (`DSH Desktop_0.1.0_x64-setup.exe`, Windows x64), or copy the portable `dsh-desktop.exe` anywhere.
+2. **Launch** the app. The launcher page shows your environment status (Node.js / npx / dsh engine).
+3. Click **启动引擎 (Start Engine)**. The app spawns the engine (`dsh --profile web` on `127.0.0.1:17800` or another free port) and loads the official WebUI automatically.
+4. Use it like the web version — sessions, plugins, trajectories, everything is there.
+
+> First run: if Node.js or `dsh` is missing, use the **one-click install** buttons on the launcher page.
+
+## 🏗 Architecture
+
+```
+┌────────────────────────────────────────────────────┐
+│  TitleBar  (custom frameless title bar + status dot)│
+├────────────────────────────────────────────────────┤
+│  iframe (full-screen) → official DeepSeek Harness  │
+│  WebUI — sessions / trajectories / plugins /        │
+│  settings, all official functionality              │
+├────────────────────────────────────────────────────┤
+│  StatusBar (engine state · port · session count)    │
+└────────────────────────────────────────────────────┘
+```
+
+- **Frontend**: React 19 + TypeScript + Vite 6 + Tailwind CSS 4 + Zustand
+- **Desktop shell**: Tauri 2 (Rust), frameless window with custom title bar
+- **Engine lifecycle** (`src/lib/dshEngine.ts`): scan for existing instances → pick a free port → spawn (`node` + local `bin.js`, with `npx` / `dsh` / `dsh.cmd` fallbacks) → health-check → stop
+- **Networking**: HTTP RPC (`POST /api/<method>`) + WebSocket event streams via `@tauri-apps/plugin-http` (avoids WebView2 CORS entirely)
+- **Diagnostics**: spawn attempts and failures are logged to `%TEMP%\dsh-spawn.log`
+
+## 🧰 Tech stack
+
+| Layer | Choice |
 |---|---|
-| 桌面壳 | Tauri 2（Rust），无边框窗口 + 自定义标题栏 |
-| 前端 | React 19 + TypeScript 5.6 + Vite 6 |
-| 样式 | Tailwind CSS 4 |
-| 状态 | Zustand 5（engine / session / chat / ui 四个 store） |
-| 渲染 | react-markdown + remark-gfm + rehype-highlight |
+| Desktop shell | Tauri 2 (Rust), frameless + custom title bar |
+| Frontend | React 19 + TypeScript + Vite 6 |
+| Styling | Tailwind CSS 4 |
+| State | Zustand 5 (engine / session / chat / ui stores) |
+| Embedded UI | Official DeepSeek Harness WebUI via iframe |
 
-## 目录结构
-
-```
-src/
-  App.tsx              应用壳（标题栏 + 侧栏 + 会话列 + 主区 + 状态栏）
-  lib/
-    api.ts             HTTP RPC 客户端 + WebSocket 事件流（协议契约层）
-    dshEngine.ts       引擎生命周期：扫描复用 / spawn / 健康检查 / 停止
-    types.ts           协议类型（对齐 dsh-host-apiproxy 真实结构）
-  stores/
-    engineStore.ts     引擎状态
-    sessionStore.ts    会话列表 / 活动会话 / 模式
-    chatStore.ts       消息流 / 轨迹事件 / 草稿
-    uiStore.ts         视图与布局
-  components/
-    TitleBar.tsx       无边框标题栏（最小化/最大化/关闭）
-    Sidebar.tsx        图标导航（对话 / 模式 / 设置）
-    SessionList.tsx    会话列表（新建/重命名/运行状态）
-    ChatPanel.tsx      聊天主区（发送/取消/分叉/轨迹切换）
-    MessageBubble.tsx  消息气泡（markdown + 工具调用卡片）
-    TrajectoryView.tsx 轨迹视图
-    SettingsPanel.tsx  常规 / 模式 / 引擎
-    EngineLauncher.tsx 引擎启动页
-    StatusBar.tsx      状态栏
-```
-
-## 开发
+## 🛠 Development
 
 ```bash
 npm install
-npm run tauri dev        # 开发模式（vite 1422 端口，避让 OneWork 的 1420）
+npm run tauri dev          # dev mode (Vite on port 1422)
 ```
 
-## 构建
+## 📦 Build
 
 ```bash
-npm run build            # tsc + vite build
-cd src-tauri && cargo check
-npm run tauri build      # 生产打包（nsis/msi）
+npm run build              # tsc + vite build
+npm run tauri build        # production bundle (NSIS installer + portable exe)
 ```
 
-> 注：crates.io 走 rsproxy.cn 镜像（`~/.cargo/config.toml`），因本机 Clash 代理锁定系统代理导致 cargo 直连失败。
+Output: `src-tauri/target/release/bundle/nsis/DSH Desktop_0.1.0_x64-setup.exe`
 
-## 引擎对接说明
+## 📁 Project layout
 
-- 引擎 = `dsh --profile web`（`dsh` 全局 CLI，`~/.dsh/profiles/web` 已配置 opencode-go + deepseek-v4-flash）
-- RPC 信封：`{rpcId, type:"client-request", method:"session.list", payload:{...}}`
-- 响应：`{type:"server-response", rpcId, result:{ok:true, value} | {ok:false, error}}`
-- 会话摘要字段：`sessionId` / `agentPreset` / `running` / `projections.values.title` / `projections.values.sessionStats`
-- `session.prompt` 契约：`{sessionId, mode:"queue", content:[{type:"text", text}]}`
-# DSH-Desktop
-DeepSeek Harness Desktop-开发者预览版的桌面版
+```
+src/
+├── App.tsx                 # shell layout: TitleBar + iframe(official UI) + StatusBar
+├── lib/
+│   ├── dshEngine.ts        # ★ engine lifecycle: findExistingInstance / startEngine / stopEngine
+│   │                       #   + candidateCommands (spawn fallback chain) + probePort + diag log
+│   └── api.ts              # HTTP RPC + WS event streams (plugin-http fetch)
+├── stores/                 # zustand stores (engine / ui / session / chat)
+└── components/
+    ├── TitleBar.tsx        # custom title bar (drag / minimize / maximize / close)
+    ├── StatusBar.tsx       # engine state · port · session count
+    └── EngineLauncher.tsx  # launcher: environment check + one-click install + start
+src-tauri/
+├── capabilities/default.json  # ★ permissions (shell spawn scope, window controls)
+├── tauri.conf.json            # window / bundle config
+└── src/lib.rs                 # plugin registration (shell / fs / dialog / http)
+```
+
+## 🔍 Troubleshooting
+
+- **Title bar buttons or dragging don't work** — `core:window:*` permissions (`allow-minimize` / `allow-toggle-maximize` / `allow-close` / `allow-start-dragging`) must be present in `src-tauri/capabilities/default.json`. Capabilities are compiled into the binary, so rebuild after editing.
+- **Engine fails to spawn** — check `%TEMP%\dsh-spawn.log`. Common causes: missing `shell:allow-spawn`, missing program scope entries, or scope entries without the `cmd` field (non-sidecar entries require `cmd`). See the log for the exact error.
+- **WebUI blank** — the app uses `@tauri-apps/plugin-http` for all requests because WebView2 blocks cross-origin fetch (CORS). Don't replace it with native `fetch`.
+
+## 📄 License
+
+[MIT](LICENSE) © 2026 dongdong-agent
