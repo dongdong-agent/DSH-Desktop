@@ -35,6 +35,41 @@ Tout le reste — sessions, trajectoires, plugins, préréglages d'agents — es
 
 > Première utilisation : si Node.js ou `dsh` manque, utilisez les boutons **d'installation en un clic** de la page de lancement.
 
+## 🖥 Prise en charge des plateformes
+
+| Plateforme | Statut | Utilisation |
+|---|---|---|
+| **Windows x64** | ✅ **Officiellement pris en charge** | Télécharger depuis [Releases](https://github.com/dongdong-agent/DSH-Desktop/releases) ou exécuter l'exe portable |
+| **macOS (Apple Silicon / Intel)** | 🚧 Compilation depuis les sources | Voir ci-dessous |
+| **Linux (x64)** | 🚧 Compilation depuis les sources | Voir ci-dessous |
+
+**Windows est la plateforme principale** — les installateurs et les builds CI ciblent Windows en premier. macOS et Linux fonctionnent avec Tauri 2 mais ne sont pas encore publiés en artefacts précompilés ; compilez-les depuis les sources :
+
+```bash
+# Prérequis (toute plateforme)
+# - Node.js ≥ 18 (https://nodejs.org) — fournit node et npx
+# - Chaîne d'outils Rust stable (https://rustup.rs)
+# - Dépendances système pour Tauri :
+#   macOS :  Xcode Command Line Tools
+#   Linux :  sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file \
+#            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+
+# Cloner et compiler
+git clone https://github.com/dongdong-agent/DSH-Desktop.git
+cd DSH-Desktop
+npm install
+npm run tauri build     # produit .app (macOS) / .deb/.AppImage (Linux) dans src-tauri/target/release/bundle/
+```
+
+**Remarques multiplateformes** :
+
+- La coque de bureau (Tauri 2) est entièrement multiplateforme. Le moteur est le paquet npm officiel `@deepseek-ai/dsh`, qui fonctionne sur les trois plateformes via Node.js.
+- Sur macOS/Linux, le moteur est lancé via la chaîne de secours `node` + `npx` (les chemins spécifiques à Windows `dsh.cmd` / `bin.js` local sont détectés à l'exécution et ignorés s'ils sont absents).
+- Les sessions du moteur vivent dans `~/.dsh/` sur toutes les plateformes — sessions, profils et identifiants sont portables entre les OS.
+- Vous voulez des artefacts précompilés macOS/Linux ? Ouvrez une [issue](https://github.com/dongdong-agent/DSH-Desktop/issues) — le workflow CI peut être étendu pour les publier.
+
+
+
 ## 🏗 Architecture
 
 ```
