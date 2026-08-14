@@ -1,26 +1,51 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
   <defs>
+    <!-- DeepSeek 品牌蓝渐变底 -->
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#1a1a24"/>
-      <stop offset="100%" stop-color="#0d0d12"/>
+      <stop offset="0%" stop-color="#4D6BFE"/>
+      <stop offset="100%" stop-color="#2E3FBE"/>
     </linearGradient>
-    <linearGradient id="acc" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#a855f7"/>
-      <stop offset="100%" stop-color="#6d28d9"/>
+    <!-- 鲸鱼身体高光 -->
+    <linearGradient id="whale" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="100%" stop-color="#E6EBFF"/>
     </linearGradient>
   </defs>
-  <rect width="512" height="512" rx="96" fill="url(#bg)"/>
-  <!-- 插件方块网格（一切皆插件） -->
-  <g fill="none" stroke="url(#acc)" stroke-width="14">
-    <rect x="96" y="96" width="140" height="140" rx="28"/>
-    <rect x="276" y="96" width="140" height="140" rx="28"/>
-    <rect x="96" y="276" width="140" height="140" rx="28"/>
-    <rect x="276" y="276" width="140" height="140" rx="28"/>
+
+  <!-- 圆角方底 -->
+  <rect width="512" height="512" rx="108" fill="url(#bg)"/>
+
+  <!-- 鲸鱼身体（极简几何：圆润水滴身 + 上翘尾） -->
+  <g>
+    <!-- 尾鳍（右上翘，DeepSeek 标志性动作） -->
+    <path d="M 322 214
+             C 356 198, 392 178, 408 152
+             C 402 176, 402 200, 398 218
+             C 372 210, 346 208, 322 214 Z"
+          fill="url(#whale)" opacity="0.95"/>
+    <!-- 身体（圆润流线型） -->
+    <path d="M 330 224
+             C 372 224, 404 252, 404 292
+             C 404 332, 368 360, 320 360
+             C 268 360, 208 342, 156 308
+             C 120 286, 96 262, 88 240
+             C 84 228, 88 216, 98 214
+             C 130 210, 176 226, 216 240
+             C 258 254, 292 260, 316 260
+             C 326 260, 330 258, 330 250
+             C 330 242, 328 234, 326 228 Z"
+          fill="url(#whale)"/>
+    <!-- 腹鳍 -->
+    <path d="M 150 300 C 168 318, 182 332, 194 344 C 178 338, 160 330, 148 322 Z"
+          fill="#C9D4FF"/>
+    <!-- 眼睛 -->
+    <circle cx="352" cy="262" r="10" fill="#2E3FBE"/>
+    <!-- 喷水孔（呼吸孔水花） -->
+    <g fill="none" stroke="#FFFFFF" stroke-width="9" stroke-linecap="round" opacity="0.9">
+      <path d="M 396 208 C 398 196, 402 188, 408 182"/>
+      <circle cx="416" cy="172" r="6" fill="#FFFFFF" stroke="none" opacity="0.85"/>
+      <circle cx="404" cy="164" r="4.5" fill="#FFFFFF" stroke="none" opacity="0.7"/>
+      <circle cx="424" cy="162" r="3.5" fill="#FFFFFF" stroke="none" opacity="0.6"/>
+    </g>
   </g>
-  <!-- 中心链路（Cordis 内核连接插件） -->
-  <circle cx="166" cy="166" r="34" fill="url(#acc)"/>
-  <circle cx="346" cy="346" r="34" fill="url(#acc)"/>
-  <path d="M 200 166 H 276 M 166 200 V 276" stroke="url(#acc)" stroke-width="14" stroke-linecap="round"/>
-  <!-- 焦点高亮 -->
-  <circle cx="346" cy="166" r="22" fill="#22d3ee" opacity="0.85"/>
 </svg>
