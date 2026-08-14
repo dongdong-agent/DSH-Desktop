@@ -36,6 +36,13 @@
   "bundle": {
     "active": true,
     "targets": ["nsis"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
     "category": "DeveloperTool",
     "shortDescription": "DeepSeek Harness 高性能桌面客户端",
     "longDescription": "DeepSeek Harness 桌面客户端（Tauri 2 + React 19）：引擎复用、官方 WebUI 内嵌、Trajectory 轨迹视图。"
