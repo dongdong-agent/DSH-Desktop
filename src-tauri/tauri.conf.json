@@ -43,6 +43,12 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "windows": {
+      "nsis": {
+        "installerIcon": "icons/icon.ico",
+        "uninstallerIcon": "icons/icon.ico"
+      }
+    },
     "category": "DeveloperTool",
     "shortDescription": "DeepSeek Harness 高性能桌面客户端",
     "longDescription": "DeepSeek Harness 桌面客户端（Tauri 2 + React 19）：引擎复用、官方 WebUI 内嵌、Trajectory 轨迹视图。"
