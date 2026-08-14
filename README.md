@@ -35,6 +35,39 @@ Everything else — sessions, trajectories, plugins, agent presets, settings —
 
 > First run: if Node.js or `dsh` is missing, use the **one-click install** buttons on the launcher page.
 
+## 🖥 Platform support
+
+| Platform | Status | How to use |
+|---|---|---|
+| **Windows x64** | ✅ **Officially supported** | Download from [Releases](https://github.com/dongdong-agent/DSH-Desktop/releases) or run the portable exe |
+| **macOS (Apple Silicon / Intel)** | 🚧 Build from source | See below |
+| **Linux (x64)** | 🚧 Build from source | See below |
+
+**Windows is the primary platform** — installers and CI builds target it first. macOS and Linux builds work with Tauri 2 but are not yet shipped as prebuilt artifacts; build them from source:
+
+```bash
+# Prerequisites (any platform)
+# - Node.js ≥ 18 (https://nodejs.org) — provides node + npx
+# - Rust stable toolchain (https://rustup.rs)
+# - Platform system deps for Tauri:
+#   macOS:  Xcode Command Line Tools
+#   Linux:  sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file \
+#           libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+
+# Clone and build
+git clone https://github.com/dongdong-agent/DSH-Desktop.git
+cd DSH-Desktop
+npm install
+npm run tauri build     # produces .app (macOS) / .deb/.AppImage (Linux) in src-tauri/target/release/bundle/
+```
+
+**Cross-platform notes**:
+
+- The app shell (Tauri 2) is fully cross-platform. The engine is the official `@deepseek-ai/dsh` npm package, which runs on all three platforms via Node.js.
+- On macOS/Linux the engine is spawned through the `node` + `npx` fallback chain (the Windows-specific `dsh.cmd` / local `bin.js` paths are probed at runtime and skipped when absent).
+- Engine sessions live in `~/.dsh/` on every platform — your sessions, profiles and credentials are portable across OSes.
+- Want prebuilt macOS/Linux artifacts? Open an [issue](https://github.com/dongdong-agent/DSH-Desktop/issues) — the CI workflow can be extended to publish them.
+
 ## 🏗 Architecture
 
 ```
