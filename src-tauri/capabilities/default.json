@@ -1,0 +1,51 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "DSH Desktop 主窗口能力",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "shell:allow-open",
+    {
+      "identifier": "shell:allow-execute",
+      "allow": [
+        {
+          "name": "dsh",
+          "sidecar": false,
+          "args": true
+        },
+        {
+          "name": "dsh.cmd",
+          "sidecar": false,
+          "args": true
+        },
+        {
+          "name": "node",
+          "sidecar": false,
+          "args": true
+        },
+        {
+          "name": "npm",
+          "sidecar": false,
+          "args": true
+        },
+        {
+          "name": "winget",
+          "sidecar": false,
+          "args": true
+        }
+      ]
+    },
+    "fs:default",
+    {
+      "identifier": "fs:allow-exists",
+      "allow": [{ "path": "C:\\Program Files\\nodejs\\**" }, { "path": "C:\\**" }]
+    },
+    "dialog:default",
+    "http:default",
+    {
+      "identifier": "http:allow-fetch",
+      "allow": [{ "url": "http://127.0.0.1:*" }]
+    }
+  ]
+}
