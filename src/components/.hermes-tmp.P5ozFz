@@ -1,0 +1,133 @@
+import { useEffect, useState } from "react";
+import { Play, Rocket, Loader2, AlertTriangle, CheckCircle2, XCircle, HelpCircle } from "lucide-react";
+import { useEngineStore } from "../stores/engineStore";
+import { checkEnvironment, startEngine, type DshEnvironment } from "../lib/dshEngine";
+
+/** 引擎启动页（首次进入 / 引擎未运行时显示） */
+export function EngineLauncher() {
+  const health = useEngineStore((s) => s.health);
+  const setLaunchRequested = useEngineStore((s) => s.setLaunchRequested);
+  const launchRequested = useEngineStore((s) => s.launchRequested);
+  const [env, setEnv] = useState<DshEnvironment | null>(null);
+  const [envChecked, setEnvChecked] = useState(false);
+
+  // 启动时探测环境（新用户展示安装指引）
+  useEffect(() => {
+    void (async () => {
+      const e = await checkEnvironment();
+      setEnv(e);
+      setEnvChecked(true);
+    })();
+  }, []);
+
+  const handleLaunch = async () => {
+    setLaunchRequested(true);
+    try {
+      await startEngine();
+    } catch {
+      // 错误状态已通过 health 广播
+    }
+  };
+
+  const launching = health.status === "starting" || launchRequested;
+
+  const EnvRow = ({ ok, label, hint }: { ok: boolean; label: string; hint: string }) => (
+    <div className="flex items-center gap-2 text-[12.5px]">
+      {ok ? (
+        <CheckCircle2 size={14} className="shrink-0 text-emerald-400" />
+      ) : (
+        <XCircle size={14} className="shrink-0 text-red-400" />
+      )}
+      <span className={ok ? "text-gray-300" : "text-gray-400"}>{label}</span>
+      {!ok && <span className="truncate text-[11px] text-gray-600">{hint}</span>}
+    </div>
+  );
+
+  return (
+    <div className="flex h-full items-center justify-center bg-[rgb(10_10_12)]">
+      <div className="w-full max-w-md px-8 text-center">
+        <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl bg-[rgb(168_85_247_/_0.15)] ring-1 ring-purple-500/30">
+          <Rocket size={28} className="text-purple-300" />
+        </div>
+        <h1 className="text-xl font-semibold text-gray-100">DeepSeek Harness Desktop</h1>
+        <p className="mt-2 text-[13px] leading-6 text-gray-400">
+          一切皆插件 · 模型 / 工具 / 技能 / 会话 / 沙箱 / 存储 / 循环 / 调度 / UI
+        </p>
+
+        {/* 环境状态 */}
+        <div className="mt-6 flex flex-col gap-2 rounded-xl border border-white/[0.07] bg-[rgb(15_15_19)] p-4 text-left">
+          <div className="mb-1 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-gray-500">
+            <HelpCircle size={12} /> 运行环境
+          </div>
+          {!envChecked ? (
+            <div className="flex items-center gap-2 text-[12.5px] text-gray-500">
+              <Loader2 size={13} className="animate-spin" /> 检测中…
+            </div>
+          ) : (
+            <>
+              <EnvRow
+                ok={env?.nodeAvailable ?? false}
+                label={`Node.js${env?.nodeVersion ? ` ${env.nodeVersion}` : ""}`}
+                hint="需安装 Node.js（nodejs.org）"
+              />
+              <EnvRow
+                ok={env?.npxAvailable ?? false}
+                label="npx（npm 自带）"
+                hint="npx 将自动下载引擎"
+              />
+              <EnvRow
+                ok={env?.localDshAvailable ?? false}
+                label="dsh 引擎（本机）"
+                hint="将通过 npx 自动获取"
+              />
+            </>
+          )}
+        </div>
+
+        <div className="mt-3 flex flex-col gap-2 rounded-xl border border-white/[0.07] bg-[rgb(15_15_19)] p-4 text-left">
+          <div className="flex items-center gap-2 text-[12.5px] text-gray-300">
+            <span className="text-emerald-400">●</span> 复用已有实例（若 dsh web 正在运行）
+          </div>
+          <div className="flex items-center gap-2 text-[12.5px] text-gray-300">
+            <span className="text-purple-400">●</span> 自动探测空闲端口并启动引擎
+          </div>
+          <div className="flex items-center gap-2 text-[12.5px] text-gray-300">
+            <span className="text-cyan-400">●</span> 连接 HTTP RPC + WebSocket 事件流
+          </div>
+        </div>
+
+        {health.status === "error" && (
+          <div className="mt-4 flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-left text-[12px] leading-5 text-red-300">
+            <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+            <div>
+              引擎启动失败：{health.error}
+              <br />
+              若为首次使用，请确认已安装 Node.js（<code className="font-mono">node --version</code>）
+            </div>
+          </div>
+        )}
+
+        <button
+          onClick={handleLaunch}
+          disabled={launching}
+          className="mt-6 flex w-full items-center justify-center gap-2 rounded-xl bg-purple-500 py-3 text-sm font-semibold text-white transition-colors hover:bg-purple-400 disabled:opacity-60"
+        >
+          {launching ? (
+            <>
+              <Loader2 size={16} className="animate-spin" /> 正在启动引擎…
+            </>
+          ) : (
+            <>
+              <Play size={15} /> 启动引擎
+            </>
+          )}
+        </button>
+        <div className="mt-3 text-[11px] leading-5 text-gray-600">
+          首次使用将自动通过 npx 获取引擎（约 1-3 分钟）
+          <br />
+          也可手动安装：<code className="font-mono">npm install -g @deepseek-ai/dsh</code>
+        </div>
+      </div>
+    </div>
+  );
+}

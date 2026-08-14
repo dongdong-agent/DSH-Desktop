@@ -1,0 +1,43 @@
+{
+  "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/dev/crates/tauri-cli/schema.json",
+  "productName": "DSH Desktop",
+  "version": "0.1.0",
+  "identifier": "com.dsh.desktop",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1422",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "DeepSeek Harness Desktop",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 940,
+        "minHeight": 620,
+        "maximized": true,
+        "decorations": false,
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,TrackingPrevention",
+        "dataDirectory": "webview2-default",
+        "dragDropEnabled": true
+      }
+    ],
+    "security": {
+      "csp": null,
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["**/*"]
+      }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "category": "DeveloperTool",
+    "shortDescription": "DeepSeek Harness 高性能桌面客户端",
+    "longDescription": "用 OneWork 同款架构（Tauri 2 + React 19）打造的 DeepSeek Harness 桌面 GUI：引擎复用、四模式切换、Trajectory 轨迹视图。"
+  }
+}
