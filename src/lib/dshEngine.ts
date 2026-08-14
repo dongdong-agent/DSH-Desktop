@@ -12,11 +12,12 @@
 // ============================================================
 import { Command, type Child } from "@tauri-apps/plugin-shell";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
-import { exists, writeTextFile } from "@tauri-apps/plugin-fs";
+import { exists, readDir, writeTextFile } from "@tauri-apps/plugin-fs";
+import { homeDir } from "@tauri-apps/api/path";
 import type { EngineHealth } from "./types";
 
-/** 诊断日志（落盘 %TEMP%\dsh-spawn.log；WebView console 不输出到终端，靠文件看错误） */
-const DIAG_LOG = "C:\\Users\\vista\\AppData\\Local\\Temp\\dsh-spawn.log";
+/** 诊断日志（落盘系统临时目录 dsh-spawn.log；WebView console 不输出到终端，靠文件看错误） */
+const DIAG_LOG = "C:\\Windows\\Temp\\dsh-spawn.log";
 let diagBuf = "";
 function diag(...parts: unknown[]) {
   diagBuf += `[${new Date().toISOString()}] ${parts.map((p) => (typeof p === "string" ? p : JSON.stringify(p))).join(" ")}\n`;
@@ -43,30 +44,66 @@ const DEFAULT_PORT = 17800;
 const KNOWN_DHS_PORTS = [3080, 8080, 8081, 3000, 5173, 17800, 18080];
 const MAX_START_WAIT_MS = 30_000;
 
-/** pnpm 安装的真实 bin.js（本机东哥路径，MSYS 下 pnpm 把 /c/ 写成 C:\c\，路径自洽） */
-const DSH_BIN_JS =
-  "C:\\c\\Users\\vista\\AppData\\Local\\pnpm\\global\\5\\.pnpm\\@deepseek-ai+dsh@0.1.0-rc.6_4b02b31f4347d42e02dd8ae2631af2b2\\node_modules\\@deepseek-ai\\dsh\\lib\\bin.js";
-
 /** npm 自带 npx-cli.js（新用户零安装兜底：npx --yes @deepseek-ai/dsh 自动下载） */
 const NPX_CLI_JS = "C:\\Program Files\\nodejs\\node_modules\\npm\\bin\\npx-cli.js";
 
 /** 候选启动命令（按优先级）：
  * 直接 spawn 简单命令名（capabilities 的 shell:allow-execute 里用
  * `cmd` 字段映射绝对路径，如 name=node → C:\Program Files\nodejs\node.exe）。
- * 注意：不要用 cmd.exe /C 包装——cmd 的引号转义会破坏含空格路径；
- * 也不要传绝对路径给 Command.create（Tauri 按 name 匹配权限）。
- * 1. node + 本机已装 bin.js（最快，零下载）
+ * 1. node + 本机已装 bin.js（运行时探测 pnpm 全局目录，最快零下载）
  * 2. node + npx-cli.js --yes @deepseek-ai/dsh（新用户开箱：自动下载引擎）
  * 3. `dsh`（PATH 里的 shim）
  * 4. `dsh.cmd`（npm 的 cmd shim）
  */
-function candidateCommands(args: string[]): Array<[string, string[]]> {
-  return [
-    ["node", [DSH_BIN_JS, ...args]],
+
+/** 运行时探测本机 pnpm 全局目录里的 dsh bin.js（用 homeDir() 定位，不硬编码用户名） */
+let dshBinJsCache: string | null | undefined;
+async function findDshBinJs(): Promise<string | null> {
+  if (dshBinJsCache !== undefined) return dshBinJsCache;
+  dshBinJsCache = null;
+  try {
+    // Tauri 环境：homeDir() 返回当前用户主目录（跨用户通用）
+    const home = await homeDir();
+    // 尝试常见 pnpm global 目录（含 MSYS 变体 C:\c\Users\...）
+    const candidates = [
+      `${home}AppData\\Local\\pnpm\\global\\5\\.pnpm`,
+      `C:\\c\\Users\\${home.split("\\").pop() ?? ""}\\AppData\\Local\\pnpm\\global\\5\\.pnpm`,
+    ];
+    for (const base of candidates) {
+      try {
+        if (await exists(base)) {
+          // 扫描 @deepseek-ai+dsh@* 目录
+          const entries = await readDir(base).catch(() => []);
+          const dshDir = entries.find((e) => e.name.startsWith("@deepseek-ai+dsh@"));
+          if (dshDir) {
+            const bin = `${base}\\${dshDir.name}\\node_modules\\@deepseek-ai\\dsh\\lib\\bin.js`;
+            if (await exists(bin).catch(() => false)) {
+              dshBinJsCache = bin;
+              return bin;
+            }
+          }
+        }
+      } catch {
+        /* skip candidate */
+      }
+    }
+  } catch {
+    /* homeDir unavailable (browser env) */
+  }
+  return null;
+}
+
+function candidateCommands(args: string[], localBin: string | null): Array<[string, string[]]> {
+  const cmds: Array<[string, string[]]> = [
     ["node", [NPX_CLI_JS, "--yes", "@deepseek-ai/dsh", ...args]],
     ["dsh", args],
     ["dsh.cmd", args],
   ];
+  // 若探测到本机 bin.js，作为最高优先级
+  if (localBin) {
+    cmds.unshift(["node", [localBin, ...args]]);
+  }
+  return cmds;
 }
 
 /** 环境探测：node / npx / 本机 dsh bin.js 是否可用（供启动页展示给新用户） */
@@ -99,7 +136,7 @@ export async function checkEnvironment(): Promise<DshEnvironment> {
     /* fs unavailable */
   }
   try {
-    env.localDshAvailable = await exists(DSH_BIN_JS);
+    env.localDshAvailable = (await findDshBinJs()) !== null;
   } catch {
     /* fs unavailable */
   }
@@ -121,9 +158,12 @@ export async function checkEnvironment(): Promise<DshEnvironment> {
       /* npx missing */
     }
     try {
-      const c = Command.create("node", [DSH_BIN_JS, "--version"]);
-      const out = await c.execute();
-      env.localDshAvailable = /^\d+\.\d+/.test((out.stdout || out.stderr || "").trim());
+      const localBin = await findDshBinJs();
+      if (localBin) {
+        const c = Command.create("node", [localBin, "--version"]);
+        const out = await c.execute();
+        env.localDshAvailable = /^\d+\.\d+/.test((out.stdout || out.stderr || "").trim());
+      }
     } catch {
       /* local dsh missing */
     }
@@ -220,7 +260,8 @@ export async function findFreePort(start: number): Promise<number> {
 let versionCache: string | null = null;
 export async function getDshVersion(): Promise<string> {
   if (versionCache) return versionCache;
-  for (const [prog, cmdArgs] of candidateCommands(["--version"])) {
+  const localBin = await findDshBinJs();
+  for (const [prog, cmdArgs] of candidateCommands(["--version"], localBin)) {
     try {
       const c = Command.create(prog, cmdArgs);
       const out = await c.execute();
@@ -267,7 +308,7 @@ export async function startEngine(preferredPort = DEFAULT_PORT): Promise<EngineH
 
   const args = ["--profile", "web", "--port", String(port), "--host", "127.0.0.1"];
 
-  for (const [prog, cmdArgs] of candidateCommands(args)) {
+  for (const [prog, cmdArgs] of candidateCommands(args, await findDshBinJs())) {
     diag("尝试候选:", prog, cmdArgs);
     try {
       const c = Command.create(prog, cmdArgs);

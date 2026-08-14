@@ -44,7 +44,7 @@ export default defineConfig(async () => ({
     chunkSizeWarningLimit: 1200,
   },
   server: {
-    // 注意：1420 被 OneWork dev server 占用，本项目用 1422
+    // 注意：1420 常被其他 Tauri dev server 占用，本项目用 1422
     port: 1422,
     strictPort: true,
     host: host || false,
