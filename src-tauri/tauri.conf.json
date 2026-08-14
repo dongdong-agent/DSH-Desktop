@@ -38,6 +38,6 @@
     "targets": ["nsis"],
     "category": "DeveloperTool",
     "shortDescription": "DeepSeek Harness 高性能桌面客户端",
-    "longDescription": "用 OneWork 同款架构（Tauri 2 + React 19）打造的 DeepSeek Harness 桌面 GUI：引擎复用、四模式切换、Trajectory 轨迹视图。"
+    "longDescription": "DeepSeek Harness 桌面客户端（Tauri 2 + React 19）：引擎复用、官方 WebUI 内嵌、Trajectory 轨迹视图。"
   }
 }

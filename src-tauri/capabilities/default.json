@@ -38,7 +38,7 @@
     },
     {
       "identifier": "fs:allow-write-text-file",
-      "allow": [{ "path": "C:\\Users\\demo\\AppData\\Local\\Temp\\**" }]
+      "allow": [{ "path": "C:\\Windows\\Temp\\**" }]
     },
     "dialog:default",
     "http:default",
