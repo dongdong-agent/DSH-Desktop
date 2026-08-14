@@ -35,6 +35,39 @@ DeepSeek Harness Desktop 是一个**围绕官方 DeepSeek Harness WebUI 的轻�
 
 > 首次使用：若 Node.js 或 `dsh` 缺失，用启动页上的**一键安装**按钮即可。
 
+## 🖥 平台支持
+
+| 平台 | 状态 | 使用方法 |
+|---|---|---|
+| **Windows x64** | ✅ **官方支持** | 从 [Releases](https://github.com/dongdong-agent/DSH-Desktop/releases) 下载安装包，或直接运行便携版 exe |
+| **macOS（Apple Silicon / Intel）** | 🚧 源码构建 | 见下文 |
+| **Linux（x64）** | 🚧 源码构建 | 见下文 |
+
+**Windows 是主支持平台**——安装包和 CI 构建优先产出 Windows 版本。macOS 和 Linux 在 Tauri 2 下可以构建运行，但目前还未发布预编译产物，需从源码构建：
+
+```bash
+# 前置要求（全平台通用）
+# - Node.js ≥ 18（https://nodejs.org）— 提供 node 和 npx
+# - Rust 稳定版工具链（https://rustup.rs）
+# - Tauri 平台系统依赖：
+#   macOS：  Xcode Command Line Tools
+#   Linux：  sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file \
+#            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+
+# 克隆并构建
+git clone https://github.com/dongdong-agent/DSH-Desktop.git
+cd DSH-Desktop
+npm install
+npm run tauri build     # 产出 .app（macOS）/ .deb、.AppImage（Linux）到 src-tauri/target/release/bundle/
+```
+
+**跨平台说明**：
+
+- 桌面壳（Tauri 2）完全跨平台；引擎是官方 `@deepseek-ai/dsh` npm 包，三平台都能通过 Node.js 运行。
+- macOS/Linux 上引擎通过 `node` + `npx` 兜底链启动（Windows 专属的 `dsh.cmd` / 本地 `bin.js` 路径会在运行时探测，缺失则自动跳过）。
+- 引擎会话数据存于 `~/.dsh/`——三个平台的会话、配置、凭据互通。
+- 需要 macOS/Linux 预编译产物？在 [Issues](https://github.com/dongdong-agent/DSH-Desktop/issues) 提需求——CI 工作流可扩展发布它们。
+
 ## 🏗 架构
 
 ```
