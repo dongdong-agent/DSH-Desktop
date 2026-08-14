@@ -70,3 +70,5 @@ npm run tauri build      # 生产打包（nsis/msi）
 - 响应：`{type:"server-response", rpcId, result:{ok:true, value} | {ok:false, error}}`
 - 会话摘要字段：`sessionId` / `agentPreset` / `running` / `projections.values.title` / `projections.values.sessionStats`
 - `session.prompt` 契约：`{sessionId, mode:"queue", content:[{type:"text", text}]}`
+# DSH-Desktop
+DeepSeek Harness Desktop-开发者预览版的桌面版
