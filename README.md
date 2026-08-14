@@ -3,6 +3,10 @@
 > **DSH Desktop** — A native desktop client for [DeepSeek Harness](https://www.deepseek.com/harness/), built with Tauri 2 + React 19. It embeds the official DeepSeek Harness WebUI and manages the local engine for you.
 
 <p align="center">
+  <img src="app-icon.png" alt="DSH Desktop" width="128" height="128"/>
+</p>
+
+<p align="center">
   <img alt="Platform: Windows" src="https://img.shields.io/badge/platform-Windows%20x64-0078D6?logo=windows&logoColor=white"/>
   <img alt="Version" src="https://img.shields.io/badge/version-0.1.0-purple"/>
   <img alt="Built with Tauri" src="https://img.shields.io/badge/Tauri-2.0-24C8D8?logo=tauri&logoColor=white"/>

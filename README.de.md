@@ -35,6 +35,41 @@ Alles andere — Sitzungen, Trajektorien, Plugins, Agent-Voreinstellungen — is
 
 > Erster Start: Fehlen Node.js oder `dsh`, nutzen Sie die **Ein-Klick-Installation** auf der Launcher-Seite.
 
+## 🖥 Plattformunterstützung
+
+| Plattform | Status | Verwendung |
+|---|---|---|
+| **Windows x64** | ✅ **Offiziell unterstützt** | Von [Releases](https://github.com/dongdong-agent/DSH-Desktop/releases) herunterladen oder portable exe ausführen |
+| **macOS (Apple Silicon / Intel)** | 🚧 Aus Quellcode bauen | Siehe unten |
+| **Linux (x64)** | 🚧 Aus Quellcode bauen | Siehe unten |
+
+**Windows ist die Hauptplattform** — Installer und CI-Builds zielen zuerst auf Windows. macOS und Linux funktionieren mit Tauri 2, werden aber noch nicht als fertige Artefakte ausgeliefert; baue sie aus dem Quellcode:
+
+```bash
+# Voraussetzungen (alle Plattformen)
+# - Node.js ≥ 18 (https://nodejs.org) — liefert node und npx
+# - Rust stable Toolchain (https://rustup.rs)
+# - Plattformabhängige Systempakete für Tauri:
+#   macOS:  Xcode Command Line Tools
+#   Linux:  sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file \
+#           libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+
+# Klonen und bauen
+git clone https://github.com/dongdong-agent/DSH-Desktop.git
+cd DSH-Desktop
+npm install
+npm run tauri build     # erzeugt .app (macOS) / .deb/.AppImage (Linux) in src-tauri/target/release/bundle/
+```
+
+**Cross-Platform-Hinweise**:
+
+- Die Desktop-Shell (Tauri 2) ist vollständig plattformübergreifend. Die Engine ist das offizielle `@deepseek-ai/dsh` npm-Paket und läuft auf allen drei Plattformen über Node.js.
+- Auf macOS/Linux wird die Engine über die `node` + `npx` Fallback-Kette gestartet (die Windows-spezifischen `dsh.cmd` / lokale `bin.js`-Pfade werden zur Laufzeit geprüft und übersprungen, wenn sie fehlen).
+- Engine-Sitzungen liegen auf allen Plattformen in `~/.dsh/` — Sitzungen, Profile und Anmeldedaten sind zwischen den Betriebssystemen übertragbar.
+- Vorgefertigte macOS/Linux-Artefakte gewünscht? Eröffne ein [Issue](https://github.com/dongdong-agent/DSH-Desktop/issues) — der CI-Workflow kann erweitert werden, um sie zu veröffentlichen.
+
+
+
 ## 🏗 Architektur
 
 ```

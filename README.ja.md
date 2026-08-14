@@ -35,6 +35,41 @@ DeepSeek Harness Desktop は、**公式 DeepSeek Harness WebUI を包む軽量�
 
 > 初回利用時: Node.js や `dsh` が無い場合は、起動ページの**ワンクリックインストール**ボタンを使ってください。
 
+## 🖥 プラットフォーム対応
+
+| プラットフォーム | 状態 | 利用方法 |
+|---|---|---|
+| **Windows x64** | ✅ **公式サポート** | [Releases](https://github.com/dongdong-agent/DSH-Desktop/releases) からダウンロード、またはポータブル版 exe を実行 |
+| **macOS（Apple Silicon / Intel）** | 🚧 ソースからビルド | 下記参照 |
+| **Linux（x64）** | 🚧 ソースからビルド | 下記参照 |
+
+**Windows がメインプラットフォーム** — インストーラと CI ビルドはまず Windows 版を生成します。macOS と Linux は Tauri 2 でビルド・実行可能ですが、まだプレビルド成果物は公開していません。ソースからビルドしてください:
+
+```bash
+# 前提条件（全プラットフォーム共通）
+# - Node.js ≥ 18（https://nodejs.org）— node と npx を提供
+# - Rust stable ツールチェーン（https://rustup.rs）
+# - Tauri のプラットフォーム依存:
+#   macOS:  Xcode Command Line Tools
+#   Linux:  sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file \
+#           libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+
+# クローンしてビルド
+git clone https://github.com/dongdong-agent/DSH-Desktop.git
+cd DSH-Desktop
+npm install
+npm run tauri build     # .app（macOS）/ .deb、.AppImage（Linux）を src-tauri/target/release/bundle/ に生成
+```
+
+**クロスプラットフォームの注意点**:
+
+- デスクトップシェル（Tauri 2）は完全クロスプラットフォーム。エンジンは公式 `@deepseek-ai/dsh` npm パッケージで、3 プラットフォームすべて Node.js で動作します。
+- macOS/Linux ではエンジンは `node` + `npx` フォールバックチェーンで起動します（Windows 専用の `dsh.cmd` / ローカル `bin.js` パスは実行時にプローブされ、無ければ自動スキップ）。
+- エンジンのセッションは全プラットフォームで `~/.dsh/` に保存 — セッション・プロファイル・認証情報は OS 間で移行可能です。
+- macOS/Linux のプレビルド成果物が必要ですか？ [Issues](https://github.com/dongdong-agent/DSH-Desktop/issues) でリクエストしてください — CI ワークフローを拡張して公開できます。
+
+
+
 ## 🏗 アーキテクチャ
 
 ```

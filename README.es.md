@@ -35,6 +35,41 @@ Todo lo demás — sesiones, trayectorias, plugins, ajustes — es la **WebUI of
 
 > Primera ejecución: si faltan Node.js o `dsh`, usa los botones de **instalación con un clic** de la página de inicio.
 
+## 🖥 Soporte de plataformas
+
+| Plataforma | Estado | Cómo usar |
+|---|---|---|
+| **Windows x64** | ✅ **Oficialmente soportado** | Descargar desde [Releases](https://github.com/dongdong-agent/DSH-Desktop/releases) o ejecutar el exe portable |
+| **macOS (Apple Silicon / Intel)** | 🚧 Compilar desde código | Ver abajo |
+| **Linux (x64)** | 🚧 Compilar desde código | Ver abajo |
+
+**Windows es la plataforma principal** — los instaladores y builds de CI se dirigen primero a Windows. macOS y Linux funcionan con Tauri 2 pero aún no se publican como artefactos precompilados; compílalos desde el código fuente:
+
+```bash
+# Requisitos (cualquier plataforma)
+# - Node.js ≥ 18 (https://nodejs.org) — proporciona node y npx
+# - Toolchain estable de Rust (https://rustup.rs)
+# - Dependencias del sistema para Tauri:
+#   macOS:  Xcode Command Line Tools
+#   Linux:  sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file \
+#           libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+
+# Clonar y compilar
+git clone https://github.com/dongdong-agent/DSH-Desktop.git
+cd DSH-Desktop
+npm install
+npm run tauri build     # genera .app (macOS) / .deb/.AppImage (Linux) en src-tauri/target/release/bundle/
+```
+
+**Notas multiplataforma**:
+
+- La carcasa de escritorio (Tauri 2) es totalmente multiplataforma. El motor es el paquete npm oficial `@deepseek-ai/dsh`, que funciona en las tres plataformas vía Node.js.
+- En macOS/Linux el motor se inicia mediante la cadena de respaldo `node` + `npx` (las rutas específicas de Windows `dsh.cmd` / `bin.js` local se detectan en tiempo de ejecución y se omiten si no existen).
+- Las sesiones del motor viven en `~/.dsh/` en todas las plataformas — sesiones, perfiles y credenciales son portables entre sistemas operativos.
+- ¿Quieres artefactos precompilados para macOS/Linux? Abre un [issue](https://github.com/dongdong-agent/DSH-Desktop/issues) — el flujo de CI se puede ampliar para publicarlos.
+
+
+
 ## 🏗 Arquitectura
 
 ```
