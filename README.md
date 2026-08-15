@@ -47,6 +47,7 @@ DeepSeek Harness Desktop is a **thin native shell** around the official DeepSeek
 - **Reuse existing instances** — if a DeepSeek Harness web instance is already running on your machine, the app connects to it directly instead of starting a duplicate (no more fighting over `~/.dsh` session storage).
 - **Environment self-check + one-click install** — missing Node.js or the `dsh` engine? The launcher tells you exactly what's missing and can install it for you.
 - **Frameless window** — custom title bar (drag / minimize / maximize / close) and a status bar showing engine state, port, and session count.
+- **Auto-follows official updates** — since the UI is the official WebUI itself, when DeepSeek releases a new engine version the desktop app inherits every new feature, UI change, and model instantly after the engine update. No UI rewrite needed, ever.
 - **Local persistence** — all sessions live on disk under `~/.dsh/sessions/`, so closing the app never loses your work.
 
 Everything else — sessions, trajectories, plugins, agent presets, settings — is the **official DeepSeek Harness WebUI** at its full fidelity, since the app simply hosts it.
