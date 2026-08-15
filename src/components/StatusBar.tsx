@@ -4,8 +4,8 @@ import { useSessionStore } from "../stores/sessionStore";
 import { useChatStore } from "../stores/chatStore";
 import { getDshVersion } from "../lib/dshEngine";
 
-/** 底部状态栏：引擎状态 / 模型 / 会话数 / 事件计数 */
-export function StatusBar() {
+/** 底部状态栏：引擎状态 / 模型 / 会话数 / 缩放级别 */
+export function StatusBar({ zoom = 1 }: { zoom?: number }) {
   const health = useEngineStore((s) => s.health);
   const sessions = useSessionStore((s) => s.sessions);
   const generating = useChatStore((s) => s.generating);
@@ -48,6 +48,12 @@ export function StatusBar() {
         </>
       )}
       <div className="flex-1" />
+      {zoom !== 1 && (
+        <>
+          <span className="text-gray-600">缩放 {Math.round(zoom * 100)}%</span>
+          <span className="text-gray-700">|</span>
+        </>
+      )}
       <span className="text-gray-600">DeepSeek Harness Desktop</span>
     </div>
   );
