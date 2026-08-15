@@ -11,6 +11,9 @@
     "core:window:allow-close",
     "core:window:allow-start-dragging",
     "core:webview:allow-set-webview-zoom",
+    "global-shortcut:allow-register",
+    "global-shortcut:allow-unregister",
+    "global-shortcut:allow-is-registered",
     "shell:allow-open",
     {
       "identifier": "shell:allow-execute",

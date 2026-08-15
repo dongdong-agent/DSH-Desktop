@@ -18,7 +18,7 @@ export default function App() {
   const setHealth = useEngineStore((s) => s.setHealth);
   const launchRequested = useEngineStore((s) => s.launchRequested);
   const [iframeKey, setIframeKey] = useState(0);
-  const { zoom } = useZoomShortcuts();
+  const { zoom, setZoom } = useZoomShortcuts();
 
   // 订阅引擎健康状态
   useEffect(() => {
@@ -46,6 +46,15 @@ export default function App() {
   const running = health.status === "running";
   const engineUrl = health.url || `http://127.0.0.1:${health.port}`;
 
+  // Ctrl + 滚轮缩放（浏览器习惯；wheel 事件是唯一跨 iframe 冒泡的事件，
+  // 挂在容器 div 上即可捕获 iframe 内容区的滚轮——浏览器为支持 Ctrl+滚轮缩放特意如此）
+  const onWheel = (e: React.WheelEvent) => {
+    if (!e.ctrlKey) return;
+    e.preventDefault();
+    const delta = e.deltaY < 0 ? 0.1 : -0.1;
+    setZoom(Math.round((zoom + delta) * 10) / 10);
+  };
+
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-[rgb(10_10_12)] text-gray-100 select-none">
       <TitleBar />
@@ -54,7 +63,7 @@ export default function App() {
           <EngineLauncher />
         </div>
       ) : (
-        <main className="min-h-0 w-full flex-1">
+        <main className="min-h-0 w-full flex-1" onWheel={onWheel}>
           {running ? (
             <iframe
               key={iframeKey}
@@ -70,7 +79,7 @@ export default function App() {
           )}
         </main>
       )}
-      <StatusBar zoom={zoom} />
+      <StatusBar zoom={zoom} onZoomChange={setZoom} />
     </div>
   );
 }

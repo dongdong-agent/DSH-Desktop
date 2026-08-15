@@ -5,7 +5,13 @@ import { useChatStore } from "../stores/chatStore";
 import { getDshVersion } from "../lib/dshEngine";
 
 /** 底部状态栏：引擎状态 / 模型 / 会话数 / 缩放级别 */
-export function StatusBar({ zoom = 1 }: { zoom?: number }) {
+export function StatusBar({
+  zoom = 1,
+  onZoomChange,
+}: {
+  zoom?: number;
+  onZoomChange?: (next: number) => void;
+}) {
   const health = useEngineStore((s) => s.health);
   const sessions = useSessionStore((s) => s.sessions);
   const generating = useChatStore((s) => s.generating);
@@ -48,9 +54,29 @@ export function StatusBar({ zoom = 1 }: { zoom?: number }) {
         </>
       )}
       <div className="flex-1" />
-      {zoom !== 1 && (
+      {onZoomChange && (
         <>
-          <span className="text-gray-600">缩放 {Math.round(zoom * 100)}%</span>
+          <button
+            onClick={() => onZoomChange(Math.round((zoom - 0.1) * 10) / 10)}
+            title="缩小 (Ctrl+-)"
+            className="rounded px-1.5 text-gray-500 hover:bg-white/[0.08] hover:text-gray-200"
+          >
+            −
+          </button>
+          <button
+            onClick={() => onZoomChange(1)}
+            title="重置 100% (Ctrl+0)"
+            className={`rounded px-1.5 hover:bg-white/[0.08] ${zoom !== 1 ? "text-gray-500 hover:text-gray-200" : "text-gray-300"}`}
+          >
+            {Math.round(zoom * 100)}%
+          </button>
+          <button
+            onClick={() => onZoomChange(Math.round((zoom + 0.1) * 10) / 10)}
+            title="放大 (Ctrl++)"
+            className="rounded px-1.5 text-gray-500 hover:bg-white/[0.08] hover:text-gray-200"
+          >
+            +
+          </button>
           <span className="text-gray-700">|</span>
         </>
       )}

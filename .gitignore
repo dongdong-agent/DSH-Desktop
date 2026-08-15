@@ -27,3 +27,5 @@ Thumbs.db
 # Hermes 编辑临时文件
 .hermes-tmp.*
 docs/
+dist-chinese/
+DSH中文版-v0.1.0.zip
