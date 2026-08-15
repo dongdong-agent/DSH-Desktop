@@ -29,7 +29,7 @@ Three variants are published. Pick the one that fits your students / users:
 | **v0.1.0-full-english** | **Full portable engine, official English** — bundled Node.js + dsh (unmodified) | 52 MB | ❌ No | 🇬🇧 English |
 
 **Which one to use?**
-- **Students without Node.js** → `v0.1.0-chinese` or `v0.1.0-full-english` (zero dependencies, double-click to run)
+- **Students without Node.js** → `v0.1.0-chinese` (`DSH-Desktop-Chinese-Setup-v0.1.0.exe`) or `v0.1.0-full-english` (`DSH-Desktop-Full-English-v0.1.0.exe`) — zero dependencies, double-click to run
 - **Chinese-first conversations** → `v0.1.0-chinese`
 - **Existing Node.js environment / want the native GUI** → `v0.1.0` (2.5 MB shell)
 
