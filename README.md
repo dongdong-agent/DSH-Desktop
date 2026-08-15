@@ -26,11 +26,13 @@ Three variants are published. Pick the one that fits your students / users:
 |---|---|---|---|---|
 | **v0.1.0** | **Tauri shell** — native GUI (TitleBar/StatusBar/zoom) that embeds the official WebUI | 2.5 MB | ✅ **Yes** (engine fetched at runtime) | Follows engine persona |
 | **v0.1.0-chinese** | **Full portable engine, Chinese-first** — bundled Node.js + dsh + Chinese persona (简体中文思考/对话) | 52 MB | ❌ No | 🇨🇳 **Chinese** |
+| **v0.1.0-chinese-lite** | **Lite Chinese engine** — dsh + Chinese persona, uses system Node.js | 31 MB | ✅ Yes | 🇨🇳 **Chinese** |
 | **v0.1.0-full-english** | **Full portable engine, official English** — bundled Node.js + dsh (unmodified) | 52 MB | ❌ No | 🇬🇧 English |
 
 **Which one to use?**
 - **Students without Node.js** → `v0.1.0-chinese` (`DSH-Desktop-Chinese-Setup-v0.1.0.exe`) or `v0.1.0-full-english` (`DSH-Desktop-Full-English-v0.1.0.exe`) — zero dependencies, double-click to run
-- **Chinese-first conversations** → `v0.1.0-chinese`
+- **Chinese-first conversations, has Node.js** → `v0.1.0-chinese-lite` (31 MB, smallest Chinese package)
+- **Chinese-first conversations, no Node.js** → `v0.1.0-chinese`
 - **Existing Node.js environment / want the native GUI** → `v0.1.0` (2.5 MB shell)
 
 > All three share the same engine (`@deepseek-ai/dsh@0.1.0-rc.6`). Data lives in `~/.dsh/` regardless of variant.
