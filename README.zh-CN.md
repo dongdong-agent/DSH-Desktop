@@ -48,7 +48,7 @@ DeepSeek Harness Desktop 是一个**围绕官方 DeepSeek Harness WebUI 的轻�
 | **v0.1.0-full-english** | **英文全量便携版**——内置 Node.js + dsh（官方原版，未修改） | 52 MB | ❌ 不需要 | 🇬🇧 英文 |
 
 **怎么选？**
-- **学员没装 Node.js** → `v0.1.0-chinese` 或 `v0.1.0-full-english`（零依赖，双击即用）
+- **学员没装 Node.js** → `v0.1.0-chinese`（`DSH-Desktop-Chinese-Setup-v0.1.0.exe`）或 `v0.1.0-full-english`（`DSH-Desktop-Full-English-v0.1.0.exe`）——零依赖，双击即用
 - **想要中文对话** → `v0.1.0-chinese`
 - **已有 Node 环境 / 想要原生 GUI 壳** → `v0.1.0`（2.5 MB）
 
