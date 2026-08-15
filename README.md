@@ -18,6 +18,25 @@
 
 ---
 
+## 📦 Releases — Version Guide
+
+Three variants are published. Pick the one that fits your students / users:
+
+| Release | What it is | Size | Node.js required | Default chat language |
+|---|---|---|---|---|
+| **v0.1.0** | **Tauri shell** — native GUI (TitleBar/StatusBar/zoom) that embeds the official WebUI | 2.5 MB | ✅ **Yes** (engine fetched at runtime) | Follows engine persona |
+| **v0.1.0-chinese** | **Full portable engine, Chinese-first** — bundled Node.js + dsh + Chinese persona (简体中文思考/对话) | 52 MB | ❌ No | 🇨🇳 **Chinese** |
+| **v0.1.0-full-english** | **Full portable engine, official English** — bundled Node.js + dsh (unmodified) | 52 MB | ❌ No | 🇬🇧 English |
+
+**Which one to use?**
+- **Students without Node.js** → `v0.1.0-chinese` or `v0.1.0-full-english` (zero dependencies, double-click to run)
+- **Chinese-first conversations** → `v0.1.0-chinese`
+- **Existing Node.js environment / want the native GUI** → `v0.1.0` (2.5 MB shell)
+
+> All three share the same engine (`@deepseek-ai/dsh@0.1.0-rc.6`). Data lives in `~/.dsh/` regardless of variant.
+
+---
+
 ## ✨ What is it?
 
 DeepSeek Harness Desktop is a **thin native shell** around the official DeepSeek Harness WebUI. Instead of reinventing the UI, it embeds the official web interface in an `iframe` and adds what a desktop app should have:
