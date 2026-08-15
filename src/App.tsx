@@ -5,6 +5,7 @@ import { StatusBar } from "./components/StatusBar";
 import { EngineLauncher } from "./components/EngineLauncher";
 import { setApiBase } from "./lib/api";
 import { findExistingInstance, onEngineHealth } from "./lib/dshEngine";
+import { useZoomShortcuts } from "./hooks/useZoomShortcuts";
 
 /**
  * DSH Desktop：Tauri 壳 + 内嵌官方 WebUI
@@ -17,6 +18,7 @@ export default function App() {
   const setHealth = useEngineStore((s) => s.setHealth);
   const launchRequested = useEngineStore((s) => s.launchRequested);
   const [iframeKey, setIframeKey] = useState(0);
+  const { zoom } = useZoomShortcuts();
 
   // 订阅引擎健康状态
   useEffect(() => {
@@ -68,7 +70,7 @@ export default function App() {
           )}
         </main>
       )}
-      <StatusBar />
+      <StatusBar zoom={zoom} />
     </div>
   );
 }
