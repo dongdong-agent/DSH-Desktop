@@ -45,11 +45,13 @@ DeepSeek Harness Desktop 是一个**围绕官方 DeepSeek Harness WebUI 的轻�
 |---|---|---|---|---|
 | **v0.1.0** | **Tauri 桌面壳**——原生 GUI（标题栏/状态栏/缩放），内嵌官方 WebUI | 2.5 MB | ✅ 需要（引擎运行时拉取） | 跟随引擎 |
 | **v0.1.0-chinese** | **中文全量便携版**——内置 Node.js + dsh + 中文 persona（简体中文思考/对话） | 52 MB | ❌ 不需要 | 🇨🇳 **中文** |
+| **v0.1.0-chinese-lite** | **中文简版**——dsh + 中文 persona，用系统 Node.js | 31 MB | ✅ 需要 | 🇨🇳 **中文** |
 | **v0.1.0-full-english** | **英文全量便携版**——内置 Node.js + dsh（官方原版，未修改） | 52 MB | ❌ 不需要 | 🇬🇧 英文 |
 
 **怎么选？**
 - **学员没装 Node.js** → `v0.1.0-chinese`（`DSH-Desktop-Chinese-Setup-v0.1.0.exe`）或 `v0.1.0-full-english`（`DSH-Desktop-Full-English-v0.1.0.exe`）——零依赖，双击即用
-- **想要中文对话** → `v0.1.0-chinese`
+- **想要中文对话、已装 Node.js** → `v0.1.0-chinese-lite`（31 MB，最小中文包）
+- **想要中文对话、没装 Node.js** → `v0.1.0-chinese`
 - **已有 Node 环境 / 想要原生 GUI 壳** → `v0.1.0`（2.5 MB）
 
 > 三个版本共用同一引擎（`@deepseek-ai/dsh@0.1.0-rc.6`），数据都在 `~/.dsh/`，互不影响。
