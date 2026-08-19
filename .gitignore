@@ -28,4 +28,8 @@ Thumbs.db
 .hermes-tmp.*
 docs/
 dist-chinese/
+dist-chinese-lite/
+dist-english/
 DSH中文版-v0.1.0.zip
+DSH中文版-Lite-v0.1.0.zip
+DSH中文版-v0.1.0/
