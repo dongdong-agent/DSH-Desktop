@@ -1,10 +1,13 @@
 import { useEffect, useState } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { listen } from "@tauri-apps/api/event";
 import { useEngineStore } from "./stores/engineStore";
 import { TitleBar } from "./components/TitleBar";
 import { StatusBar } from "./components/StatusBar";
 import { EngineLauncher } from "./components/EngineLauncher";
+import { CloseDialog } from "./components/CloseDialog";
 import { setApiBase } from "./lib/api";
-import { findExistingInstance, onEngineHealth } from "./lib/dshEngine";
+import { findExistingInstance, onEngineHealth, stopEngine } from "./lib/dshEngine";
 import { useZoomShortcuts } from "./hooks/useZoomShortcuts";
 
 /**
@@ -19,6 +22,40 @@ export default function App() {
   const launchRequested = useEngineStore((s) => s.launchRequested);
   const [iframeKey, setIframeKey] = useState(0);
   const { zoom, setZoom } = useZoomShortcuts();
+  const [closeDialogOpen, setCloseDialogOpen] = useState(false);
+  const appWindow = getCurrentWindow();
+
+  // 关闭请求（点 X / Alt+F4 / 托盘退出）→ 拦截并弹出三选一
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let active = true;
+    (async () => {
+      unlisten = await appWindow.onCloseRequested((event) => {
+        event.preventDefault();
+        if (active) setCloseDialogOpen(true);
+      });
+    })();
+    return () => {
+      active = false;
+      unlisten?.();
+    };
+  }, [appWindow]);
+
+  // 托盘菜单“退出并停止引擎”：停引擎后强制销毁窗口（destroy 不再触发 onCloseRequested）
+  useEffect(() => {
+    const unlisten = listen("tray-quit", () => {
+      void (async () => {
+        try {
+          await stopEngine();
+        } finally {
+          await appWindow.destroy().catch(() => {});
+        }
+      })();
+    });
+    return () => {
+      unlisten.then((f) => f());
+    };
+  }, [appWindow]);
 
   // 订阅引擎健康状态
   useEffect(() => {
@@ -80,6 +117,30 @@ export default function App() {
         </main>
       )}
       <StatusBar zoom={zoom} onZoomChange={setZoom} />
+      {closeDialogOpen && (
+        <CloseDialog
+          onMinimizeToTray={() => {
+            setCloseDialogOpen(false);
+            void appWindow.hide();
+          }}
+          onCloseWindow={() => {
+            setCloseDialogOpen(false);
+            // 只关窗口，引擎保持后台运行（不 kill）
+            void appWindow.destroy();
+          }}
+          onStopAndExit={() => {
+            setCloseDialogOpen(false);
+            void (async () => {
+              try {
+                await stopEngine();
+              } finally {
+                await appWindow.destroy();
+              }
+            })();
+          }}
+          onCancel={() => setCloseDialogOpen(false)}
+        />
+      )}
     </div>
   );
 }

@@ -1,11 +1,32 @@
+import { useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Minus, Square, X } from "lucide-react";
+import { confirm } from "@tauri-apps/plugin-dialog";
+import { Minus, Square, X, RotateCw } from "lucide-react";
 import { useEngineStore } from "../stores/engineStore";
+import { restartEngine } from "../lib/dshEngine";
 
 /** 无边框窗口标题栏（窗口控制统一在右上角，左侧标题 + 引擎状态） */
 export function TitleBar() {
   const health = useEngineStore((s) => s.health);
   const appWindow = getCurrentWindow();
+  const [restarting, setRestarting] = useState(false);
+
+  const handleRestart = async () => {
+    if (restarting || health.status !== "running") return;
+    // 二次确认：重启会中断正在运行的 agent 任务
+    const ok = await confirm(
+      "确认重启引擎？\n\n正在运行的 agent 任务会被中断，重启后会重新加载配置，\n环境变量 / API Key 等改动将立即生效。",
+      { title: "重启引擎", kind: "warning", okLabel: "重启", cancelLabel: "取消" },
+    );
+    if (!ok) return;
+    setRestarting(true);
+    try {
+      await restartEngine();
+    } catch {
+      /* 错误状态已通过 health 广播 */
+    }
+    setRestarting(false);
+  };
 
   const dot =
     health.status === "running"
@@ -25,6 +46,22 @@ export function TitleBar() {
       <span className={`h-1.5 w-1.5 rounded-full ${dot}`} />
       <span className="text-xs font-medium text-gray-300">DeepSeek Harness</span>
       <span className="text-[11px] text-gray-500">Desktop</span>
+
+      {/* 重启引擎按钮（让配置 / API Key 改动生效） */}
+      <button
+        onClick={() => void handleRestart()}
+        disabled={restarting || health.status !== "running"}
+        title="重启引擎（使配置、API Key 等改动生效）"
+        className={`flex h-6 w-7 items-center justify-center rounded text-gray-400 transition-colors ${
+          restarting
+            ? "cursor-wait text-gray-500"
+            : health.status === "running"
+              ? "hover:bg-white/[0.08] hover:text-purple-300"
+              : "cursor-not-allowed opacity-40"
+        }`}
+      >
+        <RotateCw size={13} className={restarting ? "animate-spin" : ""} />
+      </button>
 
       <div className="flex-1" data-tauri-drag-region />
 

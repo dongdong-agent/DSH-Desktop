@@ -363,6 +363,41 @@ export async function stopEngine(): Promise<void> {
   emit({ status: "stopped", port: currentPort, url: `http://127.0.0.1:${currentPort}` });
 }
 
+/**
+ * 重启引擎：让配置 / 环境变量 / API Key 等改动真正生效。
+ *
+ * dsh 引擎在**进程启动时**一次性读取环境变量与配置（如 OPENCODE_GO_API_KEY），
+ * 运行中不会重读。因此只有把引擎进程真正杀掉再重新 spawn 才会生效——
+ * 只关窗口再打开会命中 findExistingInstance 复用旧实例，等于没重启。
+ *
+ * 步骤：
+ *   1. kill 本应用 spawn 出来的引擎进程（child；复用外部实例时 child 为 null，跳过）
+ *   2. 轮询等待旧端口彻底释放（避免被 findExistingInstance 误判为“已有实例”而复用）
+ *   3. 重新 startEngine：扫描复用 / 或探测空闲端口重新 spawn
+ */
+export async function restartEngine(preferredPort = DEFAULT_PORT): Promise<EngineHealth> {
+  // 1. 停掉自己 spawn 的实例
+  if (child) {
+    try {
+      await child.kill();
+    } catch {
+      /* already dead */
+    }
+    child = null;
+  }
+
+  // 2. 等旧端口彻底释放（进程退出有延迟，最多 ~6s）
+  emit({ status: "starting", port: currentPort, url: `http://127.0.0.1:${currentPort}` });
+  const deadline = Date.now() + 6000;
+  while (Date.now() < deadline) {
+    if (!(await probePort(currentPort, 400))) break;
+    await new Promise((r) => setTimeout(r, 200));
+  }
+
+  // 3. 重新启动（内部自行处理复用 / spawn / 健康检查，并在就绪后 emit running）
+  return startEngine(preferredPort);
+}
+
 /** 当前端口 */
 export function getEnginePort(): number {
   return currentPort;
