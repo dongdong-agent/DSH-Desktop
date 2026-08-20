@@ -47,6 +47,35 @@ const MAX_START_WAIT_MS = 30_000;
 /** npm 自带 npx-cli.js（新用户零安装兜底：npx --yes @deepseek-ai/dsh 自动下载） */
 const NPX_CLI_JS = "C:\\Program Files\\nodejs\\node_modules\\npm\\bin\\npx-cli.js";
 
+/**
+ * 已验版本清单：与当前 GUI 协议 / 自装插件验证过兼容的引擎版本。
+ * 官方发新内核后，新版本不在清单里 → UI 会提示「新内核未验证」并可一键回滚到本清单中
+ * 最后一个版本；确认新版本兼容后，把版本号追加到本数组即可解除提示。
+ */
+const VERIFIED_VERSIONS = ["0.1.0-rc.7"];
+
+/** 固定引擎版本：null = 跟随官方最新（默认）；非 null = 只使用该版本 */
+let pinnedVersion: string | null = null;
+
+/** 固定引擎到指定版本（null 恢复跟随最新） */
+export function pinEngineVersion(v: string | null): void {
+  pinnedVersion = v;
+  versionCache = null; // 版本缓存失效，下次重新探测
+}
+
+export function getPinnedEngineVersion(): string | null {
+  return pinnedVersion;
+}
+
+/** 该版本是否在已验证兼容清单里 */
+export function isVerifiedVersion(v: string): boolean {
+  return VERIFIED_VERSIONS.includes(v);
+}
+
+/** 回滚目标：已验证清单最后一个版本 */
+export function rollbackVersion(): string | null {
+  return VERIFIED_VERSIONS.length > 0 ? VERIFIED_VERSIONS[VERIFIED_VERSIONS.length - 1] : null;
+}
 /** 候选启动命令（按优先级）：
  * 直接 spawn 简单命令名（capabilities 的 shell:allow-execute 里用
  * `cmd` 字段映射绝对路径，如 name=node → C:\Program Files\nodejs\node.exe）。
@@ -94,15 +123,16 @@ async function findDshBinJs(): Promise<string | null> {
 }
 
 function candidateCommands(args: string[], localBin: string | null): Array<[string, string[]]> {
-  const cmds: Array<[string, string[]]> = [
-    ["node", [NPX_CLI_JS, "--yes", "@deepseek-ai/dsh", ...args]],
-    ["dsh", args],
-    ["dsh.cmd", args],
-  ];
+  const cmds: Array<[string, string[]]> = [];
   // 若探测到本机 bin.js，作为最高优先级
   if (localBin) {
     cmds.unshift(["node", [localBin, ...args]]);
   }
+  // npx 兜底：默认跟随官方最新；若 pin 了版本，则固定到 @deepseek-ai/dsh@<version>
+  const npxPkg = pinnedVersion ? `@deepseek-ai/dsh@${pinnedVersion}` : "@deepseek-ai/dsh";
+  cmds.push(["node", [NPX_CLI_JS, "--yes", npxPkg, ...args]]);
+  cmds.push(["dsh", args]);
+  cmds.push(["dsh.cmd", args]);
   return cmds;
 }
 
@@ -254,6 +284,11 @@ export async function findFreePort(start: number): Promise<number> {
     if (!(await probePort(p))) return p;
   }
   return start + 99;
+}
+
+/** 版本探测缓存清理（pin 切换后调用） */
+export function clearDshVersionCache(): void {
+  versionCache = null;
 }
 
 /** 读取 dsh 版本（一次调用，缓存；多级回退） */
