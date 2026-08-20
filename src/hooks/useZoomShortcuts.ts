@@ -36,30 +36,53 @@ export function useZoomShortcuts() {
 
   // 注册一次（无 zoom 依赖，handler 走模块级 currentZoom）
   useEffect(() => {
-    const zoomUp = "CommandOrControl+=";
-    const zoomDown = "CommandOrControl+-";
-    const zoomReset = "CommandOrControl+0";
+    // Tauri accelerator 键名规范（来自 keyboard-types）：
+    // 主键盘 = 键 → Equal；加号=Shift+Equal；减号→ Minus；
+    // 小键盘 +→ NumpadAdd、-→ NumpadSubtract；数字键 → Digit0..9。
+    // 不能用裸 "=" / "-"（非法键名，注册会静默失败）。
+    const zoomUpKeys = [
+      "CommandOrControl+Shift+Equal", // 主键盘加号（Ctrl++）
+      "CommandOrControl+Equal", // 主键盘 =
+      "CommandOrControl+NumpadAdd", // 小键盘 +（Num 键）
+    ];
+    const zoomDownKeys = [
+      "CommandOrControl+Minus", // 主键盘 -
+      "CommandOrControl+NumpadSubtract", // 小键盘 -
+    ];
+    const zoomResetKeys = ["CommandOrControl+Digit0"]; // Ctrl+0
 
+    const failures: string[] = [];
     void (async () => {
-      for (const [shortcut, handler] of [
-        [zoomUp, () => applyZoom(currentZoom + ZOOM_STEP)],
-        [zoomDown, () => applyZoom(currentZoom - ZOOM_STEP)],
-        [zoomReset, () => applyZoom(1)],
-      ] as const) {
+      const bindings: Array<[string, () => void]> = [
+        ...zoomUpKeys.map((s): [string, () => void] => [s, () => applyZoom(currentZoom + ZOOM_STEP)]),
+        ...zoomDownKeys.map((s): [string, () => void] => [s, () => applyZoom(currentZoom - ZOOM_STEP)]),
+        ...zoomResetKeys.map((s): [string, () => void] => [s, () => applyZoom(1)]),
+      ];
+      for (const [shortcut, handler] of bindings) {
         try {
           if (!(await isRegistered(shortcut))) {
-            await register(shortcut, handler as () => void);
+            await register(shortcut, handler);
           }
         } catch (e) {
+          failures.push(shortcut);
           console.warn(`[zoom] register ${shortcut} failed:`, e);
         }
+      }
+      // 暴露注册结果到 localStorage，便于诊断（状态栏可读取）
+      try {
+        localStorage.setItem(
+          "dsh-zoom-reg",
+          JSON.stringify({ ok: failures.length === 0, failed: failures }),
+        );
+      } catch {
+        /* ignore */
       }
     })();
 
     return () => {
-      void unregister(zoomUp).catch(() => {});
-      void unregister(zoomDown).catch(() => {});
-      void unregister(zoomReset).catch(() => {});
+      for (const keys of [zoomUpKeys, zoomDownKeys, zoomResetKeys]) {
+        for (const s of keys) void unregister(s).catch(() => {});
+      }
     };
     // 只注册一次，不随 zoom 变化重跑
     // eslint-disable-next-line react-hooks/exhaustive-deps

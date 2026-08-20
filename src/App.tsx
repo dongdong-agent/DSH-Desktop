@@ -107,7 +107,7 @@ export default function App() {
               src={engineUrl}
               className="h-full w-full border-0 bg-white"
               title="DeepSeek Harness WebUI"
-              sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads allow-pointer-lock"
+              sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads allow-pointer-lock allow-clipboard-write"
             />
           ) : (
             <div className="flex h-full items-center justify-center text-sm text-gray-500">
