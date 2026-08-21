@@ -29,8 +29,12 @@ export default function App() {
   const [keyManagerOpen, setKeyManagerOpen] = useState(false);
   const appWindow = getCurrentWindow();
 
+  // F12 开发者调试开关：仅在本窗口聚焦时注册全局快捷键，失焦即注销，
+  // 避免抢占其他软件的 F12（与缩放快捷键同一作用域修正）。
   useEffect(() => {
-    void (async () => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    const doReg = async () => {
       try {
         if (!(await isReg("F12"))) {
           await regShortcut("F12", () => {
@@ -40,11 +44,34 @@ export default function App() {
       } catch {
         /* 注册失败不影响运行时 */
       }
+    };
+    const doUnreg = async () => {
+      try {
+        if (await isReg("F12")) await unreg("F12").catch(() => {});
+      } catch {
+        /* ignore */
+      }
+    };
+    void (async () => {
+      try {
+        const focused = await appWindow.isFocused().catch(() => true);
+        if (disposed) return;
+        if (focused) await doReg();
+        unlisten = await appWindow.onFocusChanged(({ payload: f }) => {
+          if (f) void doReg();
+          else void doUnreg();
+        });
+        if (disposed) unlisten?.();
+      } catch {
+        /* ignore */
+      }
     })();
     return () => {
+      disposed = true;
+      unlisten?.();
       void unreg("F12").catch(() => {});
     };
-  }, []);
+  }, [appWindow]);
 
   // 关闭请求（点 X / Alt+F4 / 托盘退出）→ 拦截并弹出三选一
   useEffect(() => {

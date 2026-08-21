@@ -1,7 +1,7 @@
 {
   "name": "dsh-desktop",
   "private": true,
-  "version": "0.1.9",
+  "version": "0.1.10",
   "type": "module",
   "description": "DeepSeek Harness Desktop — 高性能桌面 GUI（Tauri 2 + React 19）",
   "scripts": {
