@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { invoke } from "@tauri-apps/api/core";
 import { confirm } from "@tauri-apps/plugin-dialog";
-import { Minus, Square, X, RotateCw, KeyRound } from "lucide-react";
+import { Minus, Square, X, RotateCw, KeyRound, Bug } from "lucide-react";
 import { useEngineStore } from "../stores/engineStore";
 import { restartEngine } from "../lib/dshEngine";
 
@@ -10,6 +11,20 @@ export function TitleBar({ onOpenKeyManager }: { onOpenKeyManager: () => void })
   const health = useEngineStore((s) => s.health);
   const appWindow = getCurrentWindow();
   const [restarting, setRestarting] = useState(false);
+  const [devtoolsOpen, setDevtoolsOpen] = useState(false);
+
+  // 打开 / 关闭 WebView 开发者调试器（F12）
+  const toggleDevtools = () => {
+    setDevtoolsOpen((open) => {
+      if (open) {
+        void webviewClose();
+        return false;
+      }
+      void invoke("open_devtools").catch(() => {});
+      return true;
+    });
+  };
+  const webviewClose = () => void invoke("close_devtools").catch(() => {});
 
   const handleRestart = async () => {
     if (restarting || health.status !== "running") return;
@@ -68,6 +83,19 @@ export function TitleBar({ onOpenKeyManager }: { onOpenKeyManager: () => void })
         }`}
       >
         <RotateCw size={13} className={restarting ? "animate-spin" : ""} />
+      </button>
+
+      {/* 开发者调试开关（F12） */}
+      <button
+        onClick={toggleDevtools}
+        title={devtoolsOpen ? "关闭开发者调试 (F12)" : "打开开发者调试 (F12)"}
+        className={`flex h-6 w-7 items-center justify-center rounded transition-colors ${
+          devtoolsOpen
+            ? "bg-amber-500/20 text-amber-300"
+            : "text-gray-400 hover:bg-white/[0.08] hover:text-amber-300"
+        }`}
+      >
+        <Bug size={13} />
       </button>
 
       <div className="flex-1" data-tauri-drag-region />

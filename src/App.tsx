@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { register as regShortcut, isRegistered as isReg, unregister as unreg } from "@tauri-apps/plugin-global-shortcut";
 import { useEngineStore } from "./stores/engineStore";
 import { TitleBar } from "./components/TitleBar";
 import { StatusBar } from "./components/StatusBar";
@@ -26,6 +28,23 @@ export default function App() {
   const [closeDialogOpen, setCloseDialogOpen] = useState(false);
   const [keyManagerOpen, setKeyManagerOpen] = useState(false);
   const appWindow = getCurrentWindow();
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        if (!(await isReg("F12"))) {
+          await regShortcut("F12", () => {
+            void invoke("open_devtools").catch(() => {});
+          });
+        }
+      } catch {
+        /* 注册失败不影响运行时 */
+      }
+    })();
+    return () => {
+      void unreg("F12").catch(() => {});
+    };
+  }, []);
 
   // 关闭请求（点 X / Alt+F4 / 托盘退出）→ 拦截并弹出三选一
   useEffect(() => {
@@ -109,7 +128,7 @@ export default function App() {
               src={engineUrl}
               className="h-full w-full border-0 bg-white"
               title="DeepSeek Harness WebUI"
-              sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads allow-pointer-lock allow-clipboard-write"
+              sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads allow-pointer-lock"
             />
           ) : (
             <div className="flex h-full items-center justify-center text-sm text-gray-500">
