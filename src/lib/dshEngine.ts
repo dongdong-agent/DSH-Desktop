@@ -122,6 +122,23 @@ async function findDshBinJs(): Promise<string | null> {
   return null;
 }
 
+/** 受管存储凭据引用清单：启动引擎时把这些环境变量置空，
+ * 让引擎 resolve 回落到 ~/.dsh/.credentials.yaml（受管存储）。
+ *
+ * 背景：引擎凭据优先级是「进程环境变量 > 受管存储 > .env」。
+ * 若用户级/系统级环境里残留同名变量（如 KeySwitch 的 env_var 适配器写入的
+ * OPENCODE_GO_API_KEY），GUI 面板写入受管存储会被静默遮蔽——改 key 不生效。
+ * 置空后受管存储成为唯一来源：面板一键切换热生效，第三方程序/用户改 key
+ * 统一走受管存储（本项目声明的稳定入口）。 */
+const MANAGED_CREDENTIAL_ENVS: Record<string, string> = {
+  OPENCODE_GO_API_KEY: "",
+  DEEPSEEK_API_KEY: "",
+  AGNES_API_KEY: "",
+  RKAPI_API_KEY: "",
+  VOLCENGINE_API_KEY: "",
+  WECOM_BOT_SECRET: "",
+};
+
 function candidateCommands(args: string[], localBin: string | null): Array<[string, string[]]> {
   const cmds: Array<[string, string[]]> = [];
   // 若探测到本机 bin.js，作为最高优先级
@@ -346,7 +363,8 @@ export async function startEngine(preferredPort = DEFAULT_PORT): Promise<EngineH
   for (const [prog, cmdArgs] of candidateCommands(args, await findDshBinJs())) {
     diag("尝试候选:", prog, cmdArgs);
     try {
-      const c = Command.create(prog, cmdArgs);
+      // 置空受管密钥环境变量：引擎 resolve 回落到受管存储（见 MANAGED_CREDENTIAL_ENVS）
+      const c = Command.create(prog, cmdArgs, { env: MANAGED_CREDENTIAL_ENVS });
       c.stdout.on("data", (line) => {
         console.log("[dsh]", line);
       });
