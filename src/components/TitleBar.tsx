@@ -1,12 +1,12 @@
 import { useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { confirm } from "@tauri-apps/plugin-dialog";
-import { Minus, Square, X, RotateCw } from "lucide-react";
+import { Minus, Square, X, RotateCw, KeyRound } from "lucide-react";
 import { useEngineStore } from "../stores/engineStore";
 import { restartEngine } from "../lib/dshEngine";
 
 /** 无边框窗口标题栏（窗口控制统一在右上角，左侧标题 + 引擎状态） */
-export function TitleBar() {
+export function TitleBar({ onOpenKeyManager }: { onOpenKeyManager: () => void }) {
   const health = useEngineStore((s) => s.health);
   const appWindow = getCurrentWindow();
   const [restarting, setRestarting] = useState(false);
@@ -47,7 +47,14 @@ export function TitleBar() {
       <span className="text-xs font-medium text-gray-300">DeepSeek Harness</span>
       <span className="text-[11px] text-gray-500">Desktop</span>
 
-      {/* 重启引擎按钮（让配置 / API Key 改动生效） */}
+      {/* 模型密钥管理（读写受管存储，热生效） */}
+      <button
+        onClick={onOpenKeyManager}
+        title="模型密钥管理（修改 opencode 等 API Key）"
+        className="flex h-6 w-7 items-center justify-center rounded text-gray-400 transition-colors hover:bg-white/[0.08] hover:text-purple-300"
+      >
+        <KeyRound size={13} />
+      </button>
       <button
         onClick={() => void handleRestart()}
         disabled={restarting || health.status !== "running"}

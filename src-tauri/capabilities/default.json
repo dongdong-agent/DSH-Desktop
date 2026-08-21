@@ -45,8 +45,12 @@
       "allow": [{ "path": "C:\\Program Files\\nodejs\\**" }, { "path": "C:\\**" }]
     },
     {
+      "identifier": "fs:allow-read-text-file",
+      "allow": [{ "path": "$HOME/.dsh/**" }]
+    },
+    {
       "identifier": "fs:allow-write-text-file",
-      "allow": [{ "path": "C:\\Windows\\Temp\\**" }]
+      "allow": [{ "path": "C:\\Windows\\Temp\\**" }, { "path": "$HOME/.dsh/**" }]
     },
     "dialog:default",
     "http:default",
