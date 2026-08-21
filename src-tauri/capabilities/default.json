@@ -46,7 +46,10 @@
     },
     {
       "identifier": "fs:allow-read-text-file",
-      "allow": [{ "path": "$HOME/.dsh/**" }]
+      "allow": [
+        { "path": "$HOME/.dsh/**" },
+        { "path": "$APPDATA/KeySwitch/**" }
+      ]
     },
     {
       "identifier": "fs:allow-write-text-file",
