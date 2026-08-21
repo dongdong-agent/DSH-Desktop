@@ -6,6 +6,7 @@ import { TitleBar } from "./components/TitleBar";
 import { StatusBar } from "./components/StatusBar";
 import { EngineLauncher } from "./components/EngineLauncher";
 import { CloseDialog } from "./components/CloseDialog";
+import { KeyManagerDialog } from "./components/KeyManagerDialog";
 import { setApiBase } from "./lib/api";
 import { findExistingInstance, onEngineHealth, stopEngine } from "./lib/dshEngine";
 import { useZoomShortcuts } from "./hooks/useZoomShortcuts";
@@ -23,6 +24,7 @@ export default function App() {
   const [iframeKey, setIframeKey] = useState(0);
   const { zoom, setZoom } = useZoomShortcuts();
   const [closeDialogOpen, setCloseDialogOpen] = useState(false);
+  const [keyManagerOpen, setKeyManagerOpen] = useState(false);
   const appWindow = getCurrentWindow();
 
   // 关闭请求（点 X / Alt+F4 / 托盘退出）→ 拦截并弹出三选一
@@ -94,7 +96,7 @@ export default function App() {
 
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-[rgb(10_10_12)] text-gray-100 select-none">
-      <TitleBar />
+      <TitleBar onOpenKeyManager={() => setKeyManagerOpen(true)} />
       {!running && !launchRequested ? (
         <div className="flex-1 overflow-hidden">
           <EngineLauncher />
@@ -141,6 +143,7 @@ export default function App() {
           onCancel={() => setCloseDialogOpen(false)}
         />
       )}
+      {keyManagerOpen && <KeyManagerDialog onClose={() => setKeyManagerOpen(false)} />}
     </div>
   );
 }
