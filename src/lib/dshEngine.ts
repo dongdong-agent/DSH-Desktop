@@ -139,27 +139,34 @@ async function findDshBinJs(targetVersion?: string | null): Promise<string | nul
     // 1) GUI 托管内核目录（版本并存：已装版本里选最高，或精确指定版本）
     try {
       const root = await kernelRootDir();
+      diag("findDshBinJs 内核目录探测:", root);
       if (await exists(root).catch(() => false)) {
         const entries = await readDir(root).catch(() => []);
+        diag("内核目录 readDir 条目:", entries.length, entries.map((e) => `${e.name}(dir=${e.isDirectory})`).join(", "));
         const dirs = entries.filter((e) => e.isDirectory && /^\d+\.\d+\.\d+/.test(e.name));
         if (targetVersion) {
           if (dirs.some((d) => d.name === targetVersion)) {
             const bin = `${root}\\${targetVersion}\\node_modules\\@deepseek-ai\\dsh\\lib\\bin.js`;
             if (await exists(bin).catch(() => false)) return bin;
+            diag("精确版本 bin.js 不存在:", bin);
           }
         } else {
           const best = dirs.map((d) => d.name).sort((a, b) => compareVersions(b, a))[0];
           if (best) {
             const bin = `${root}\\${best}\\node_modules\\@deepseek-ai\\dsh\\lib\\bin.js`;
+            diag("最优版本:", best, "bin:", bin);
             if (await exists(bin).catch(() => false)) {
               dshBinJsCache = bin;
               return bin;
             }
+            diag("最优版本 bin.js 不存在（exists=false）:", bin);
           }
         }
+      } else {
+        diag("内核目录不存在（exists=false）:", root);
       }
-    } catch {
-      /* 内核目录不可用（浏览器环境） */
+    } catch (e) {
+      diag("内核目录分支异常:", String(e));
     }
 
     // 2) 本机 pnpm 全局目录（Tauri 环境：homeDir() 返回当前用户主目录，跨用户通用）

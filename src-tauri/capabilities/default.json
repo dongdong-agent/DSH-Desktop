@@ -46,13 +46,13 @@
     {
       "identifier": "fs:allow-read-dir",
       "allow": [
-        { "path": "$APPDATA/com.dsh.desktop/**" },
+        { "path": "$HOME/AppData/Roaming/com.dsh.desktop/**" },
         { "path": "$HOME/AppData/Local/pnpm/**" }
       ]
     },
     {
       "identifier": "fs:allow-mkdir",
-      "allow": [{ "path": "$APPDATA/com.dsh.desktop/kernel/**" }]
+      "allow": [{ "path": "$HOME/AppData/Roaming/com.dsh.desktop/kernel/**" }]
     },
     {
       "identifier": "fs:allow-exists",
@@ -62,8 +62,8 @@
       "identifier": "fs:allow-read-text-file",
       "allow": [
         { "path": "$HOME/.dsh/**" },
-        { "path": "$APPDATA/KeySwitch/**" },
-        { "path": "$APPDATA/com.dsh.desktop/**" }
+        { "path": "$HOME/AppData/Roaming/KeySwitch/**" },
+        { "path": "$HOME/AppData/Roaming/com.dsh.desktop/**" }
       ]
     },
     {
@@ -71,12 +71,12 @@
       "allow": [
         { "path": "C:\\Windows\\Temp\\**" },
         { "path": "$HOME/.dsh/**" },
-        { "path": "$APPDATA/com.dsh.desktop/**" }
+        { "path": "$HOME/AppData/Roaming/com.dsh.desktop/**" }
       ]
     },
     {
       "identifier": "fs:allow-remove",
-      "allow": [{ "path": "$APPDATA/com.dsh.desktop/kernel/**" }]
+      "allow": [{ "path": "$HOME/AppData/Roaming/com.dsh.desktop/kernel/**" }]
     },
     "dialog:default",
     "http:default",
