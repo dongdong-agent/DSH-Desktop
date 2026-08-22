@@ -98,9 +98,14 @@ export function compareVersions(a: string, b: string): number {
 
 // ---------- 内核目录 ----------
 
-/** 内核根目录（%APPDATA%\com.dsh.desktop\kernel\，由 appDataDir 派生） */
+/**
+ * 内核根目录（%APPDATA%\com.dsh.desktop\kernel\）。
+ * ⚠️ Tauri 2 的 appDataDir() 返回「无尾反斜杠」的绝对路径（实测 tauri 2.11.5：
+ * dirs::data_dir().join(identifier) 的结果不带尾斜杠）——拼接子路径必须显式补分隔符，
+ * 否则会拼成 ...\com.dsh.desktopkernel（少一个反斜杠）导致探测静默失败。
+ */
 export async function kernelRootDir(): Promise<string> {
-  return `${await appDataDir()}kernel`;
+  return `${(await appDataDir()).replace(/\\+$/, "")}\\kernel`;
 }
 
 /** 列出内核目录中已安装的所有版本（按版本号升序；目录损坏/不可读时返回空） */

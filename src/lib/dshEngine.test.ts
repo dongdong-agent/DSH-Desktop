@@ -36,6 +36,11 @@ vi.mock("@tauri-apps/api/path", () => ({
   appDataDir: pathMocks.appDataDir,
 }));
 
+// 关键：dshEngine 的 httpFetch 在 plugin-http 失败时会回退原生 fetch——
+// 测试环境不 stub 的话，probePort 会真连 127.0.0.1:17800（东哥的引擎正在跑！），
+// killPortOwner 会误判「端口未释放」进入 6s 等待循环导致测试挂起。
+vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("测试环境网络不可用"); }));
+
 import {
   isVerifiedVersion,
   rollbackVersion,
@@ -44,6 +49,7 @@ import {
   getDshVersion,
   loadVerifiedVersions,
   addVerifiedVersion,
+  restartEngine,
 } from "./dshEngine";
 
 const APP_DATA = "C:\\Users\\demo\\AppData\\Roaming\\com.dsh.desktop\\";
@@ -168,6 +174,81 @@ describe("verified-versions.json 配置化", () => {
     await addVerifiedVersion("0.1.1-rc.2");
     const written = fsMocks.writeTextFile.mock.calls[fsMocks.writeTextFile.mock.calls.length - 1][1] as string;
     expect(written.match(/0\.1\.1-rc\.2/g)?.length).toBe(1);
+  });
+
+  it("回归：appDataDir 无尾反斜杠时白名单路径仍拼对（tauri 2.11 实测返回无尾斜杠）", async () => {
+    pathMocks.appDataDir.mockResolvedValue("C:\\Users\\demo\\AppData\\Roaming\\com.dsh.desktop");
+    await addVerifiedVersion("0.1.1-rc.2");
+    // 不能拼成 ...com.dsh.desktopverified-versions.json
+    expect(fsMocks.writeTextFile).toHaveBeenCalledWith(
+      "C:\\Users\\demo\\AppData\\Roaming\\com.dsh.desktop\\verified-versions.json",
+      expect.any(String),
+    );
+  });
+});
+
+// ---------- 强制重启（外部实例场景） ----------
+
+describe("restartEngine 强杀外部实例", () => {
+  it("netstat 查端口 PID + taskkill 强杀 + force 启动新内核，不复用旧进程", async () => {
+    // 内核目录分支命中（0.1.1-rc.2 已装）→ findDshBinJs 返回新内核 bin.js
+    fsMocks.exists.mockImplementation((p: string) => Promise.resolve(String(p).includes("kernel")));
+    fsMocks.readDir.mockImplementation((p: string) => {
+      if (String(p).includes("kernel"))
+        return Promise.resolve([{ name: "0.1.1-rc.2", isDirectory: true }]);
+      return Promise.resolve([]);
+    });
+    // netstat 显示 17800 被外部 PID 1234 占用；taskkill 成功；其他命令 spawn 输出版本
+    shellMocks.create.mockImplementation((prog: string) => {
+      if (prog === "netstat") {
+        return {
+          execute: vi.fn().mockResolvedValue({
+            code: 0,
+            stdout: "  TCP    127.0.0.1:17800    0.0.0.0:0    LISTENING    1234\r\n",
+            stderr: "",
+          }),
+        };
+      }
+      if (prog === "taskkill") {
+        return { execute: vi.fn().mockResolvedValue({ code: 0, stdout: "SUCCESS", stderr: "" }) };
+      }
+      const cmd = {
+        stdout: { on: vi.fn() },
+        stderr: { on: vi.fn() },
+        on: vi.fn(),
+        spawn: vi.fn(async () => {
+          cmd.stdout.on.mock.calls
+            .filter(([e]: string[]) => e === "data")
+            .forEach(([, cb]) => cb("0.1.1-rc.2\n"));
+          const closeCb = cmd.on.mock.calls.find(([e]: string[]) => e === "close")?.[1];
+          closeCb?.({ code: 0, signal: null });
+          return { pid: 99, kill: vi.fn() };
+        }),
+      };
+      return cmd;
+    });
+    // probePort 用 httpFetch（= tauriFetch）——按调用次数控制返回值：
+    // 第 1 次（killPortOwner 等端口释放）→ reject → false → 立即放行；
+    // 第 2 次起（startEngine 健康检查）→ 返回 __DSH_BOOT__ 页 → true → 启动成功，
+    // restartEngine 正常 settle（不会卡 30s×3 候选超时，也不泄漏到后续测试）
+    let fetchCount = 0;
+    httpMocks.tauriFetch.mockImplementation(() => {
+      fetchCount++;
+      if (fetchCount === 1) return Promise.reject(new Error("端口未就绪"));
+      return Promise.resolve({ ok: true, text: () => Promise.resolve("__DSH_BOOT__") });
+    });
+
+    await restartEngine(17800);
+
+    const progs = shellMocks.create.mock.calls.map(([x]: string[]) => x);
+    // 1. 强杀外部实例：netstat + taskkill 都被调用
+    expect(progs).toContain("netstat");
+    expect(progs).toContain("taskkill");
+    // 2. 启动候选用的 node + 新内核 bin.js（0.1.1-rc.2），而不是复用旧进程
+    const nodeArgs = shellMocks.create.mock.calls.find(
+      (c: unknown[]) => c[0] === "node" && Array.isArray(c[1]) && String((c[1] as string[])[0]).includes("kernel"),
+    )?.[1] as string[];
+    expect(nodeArgs?.[0]).toContain("kernel\\0.1.1-rc.2\\node_modules");
   });
 });
 

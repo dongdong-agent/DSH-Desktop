@@ -60,9 +60,9 @@ const DEFAULT_VERIFIED_VERSIONS = ["0.1.0-rc.7"];
 /** 已验证版本白名单（内存缓存：启动时从配置文件加载，运行时可追加） */
 let verifiedVersions: string[] = [...DEFAULT_VERIFIED_VERSIONS];
 
-/** 白名单配置文件路径（JSON 字符串数组） */
+/** 白名单配置文件路径（JSON 字符串数组）——appDataDir 无尾斜杠，必须显式补分隔符 */
 async function verifiedVersionsPath(): Promise<string> {
-  return `${await appDataDir()}verified-versions.json`;
+  return `${(await appDataDir()).replace(/\\+$/, "")}\\verified-versions.json`;
 }
 
 /** 从配置文件加载白名单（应用启动时调用一次；失败/不存在时用内置默认） */
@@ -417,26 +417,34 @@ export async function getDshVersion(): Promise<string> {
  * 安全策略：先扫描用户已有实例（网页版 dsh 正在跑则直接复用，绝不 spawn 第二个
  * 实例——双实例会争抢 ~/.dsh 的会话存储，可能破坏正在运行的任务）。
  */
-export async function startEngine(preferredPort = DEFAULT_PORT): Promise<EngineHealth> {
-  // 1. 扫描并复用已有实例（用户网页版正在跑的端口优先）
-  const existing = await findExistingInstance();
-  if (existing !== null) {
-    currentPort = existing;
-    const h: EngineHealth = { status: "running", port: currentPort, url: `http://127.0.0.1:${currentPort}` };
-    emit(h);
-    return h;
-  }
+/**
+ * 启动引擎。
+ * @param preferredPort 首选端口
+ * @param force 强制启动：跳过「复用已有实例」探测（restartEngine 专用——先杀旧进程再传 true，
+ *   否则 findExistingInstance 会命中还在跑的旧实例直接复用，等于没重启）
+ */
+export async function startEngine(preferredPort = DEFAULT_PORT, force = false): Promise<EngineHealth> {
+  if (!force) {
+    // 1. 扫描并复用已有实例（用户网页版正在跑的端口优先）
+    const existing = await findExistingInstance();
+    if (existing !== null) {
+      currentPort = existing;
+      const h: EngineHealth = { status: "running", port: currentPort, url: `http://127.0.0.1:${currentPort}` };
+      emit(h);
+      return h;
+    }
 
-  // 2. 指定端口已有则复用（用户可能刚好用了默认端口）
-  if (await probePort(preferredPort, 800)) {
-    currentPort = preferredPort;
-    const h: EngineHealth = { status: "running", port: currentPort, url: `http://127.0.0.1:${currentPort}` };
-    emit(h);
-    return h;
+    // 2. 指定端口已有则复用（用户可能刚好用了默认端口）
+    if (await probePort(preferredPort, 800)) {
+      currentPort = preferredPort;
+      const h: EngineHealth = { status: "running", port: currentPort, url: `http://127.0.0.1:${currentPort}` };
+      emit(h);
+      return h;
+    }
   }
 
   // 3. 无已有实例：探测空闲端口并 spawn（多级候选命令）
-  const port = await findFreePort(preferredPort);
+  const port = force ? currentPort || preferredPort : await findFreePort(preferredPort);
   currentPort = port;
   emit({ status: "starting", port, url: `http://127.0.0.1:${port}` });
 
@@ -499,19 +507,50 @@ export async function stopEngine(): Promise<void> {
 }
 
 /**
- * 重启引擎：让配置 / 环境变量 / API Key 等改动真正生效。
+ * 强杀占用指定端口的进程（无论它是不是本应用 spawn 的——旧版 GUI / 外部实例都算）。
+ * netstat -ano 查 LISTENING 的 PID → taskkill /F；杀完轮询等端口彻底释放（最多 ~6s）。
+ * taskkill 参数是 Windows 原样（Tauri Command 不经过 MSYS，/F 不会被转义破坏）。
+ */
+async function killPortOwner(port: number): Promise<void> {
+  try {
+    const out = await Command.create("netstat", ["-ano"]).execute();
+    const lines = (out.stdout || "").split(/\r?\n/);
+    const line = lines.find((l) => l.includes(`:${port}`) && l.includes("LISTENING"));
+    const pid = line?.trim().split(/\s+/).pop();
+    if (pid && pid !== "0") {
+      try {
+        await Command.create("taskkill", ["/PID", pid, "/F"]).execute();
+      } catch {
+        /* 进程可能已退出 */
+      }
+    }
+  } catch {
+    /* netstat 不可用（浏览器环境）→ 放弃强杀，仅依赖 child.kill */
+  }
+  const deadline = Date.now() + 6000;
+  while (Date.now() < deadline) {
+    if (!(await probePort(port, 400))) return;
+    await new Promise((r) => setTimeout(r, 200));
+  }
+}
+
+/**
+ * 重启引擎：让配置 / 环境变量 / API Key / 内核版本等改动真正生效。
  *
- * dsh 引擎在**进程启动时**一次性读取环境变量与配置（如 OPENCODE_GO_API_KEY），
- * 运行中不会重读。因此只有把引擎进程真正杀掉再重新 spawn 才会生效——
- * 只关窗口再打开会命中 findExistingInstance 复用旧实例，等于没重启。
+ * dsh 引擎在**进程启动时**一次性读取环境变量与配置，运行中不会重读。
+ * 因此只有把引擎进程真正杀掉再重新 spawn 才会生效。
  *
- * 步骤：
- *   1. kill 本应用 spawn 出来的引擎进程（child；复用外部实例时 child 为 null，跳过）
- *   2. 轮询等待旧端口彻底释放（避免被 findExistingInstance 误判为“已有实例”而复用）
- *   3. 重新 startEngine：扫描复用 / 或探测空闲端口重新 spawn
+ * 关键修复（2026-08-22 实测）：旧实现只 kill 自己 spawn 的 child——如果当前引擎是
+ * 外部实例（如旧版 GUI 留下的进程），child 为 null，stopEngine 杀不掉它，
+ * startEngine 又命中 findExistingInstance 直接复用 → 版本/配置永远不更新。
+ * 现在改用 killPortOwner 强杀端口进程（netstat+taskkill，不分内外），
+ * 再 force start（跳过复用探测）重新 spawn，真正换内核。
  */
 export async function restartEngine(preferredPort = DEFAULT_PORT): Promise<EngineHealth> {
-  // 1. 停掉自己 spawn 的实例
+  const targetPort = currentPort || preferredPort;
+  emit({ status: "starting", port: targetPort, url: `http://127.0.0.1:${targetPort}` });
+
+  // 1. 停掉自己 spawn 的实例（若有）
   if (child) {
     try {
       await child.kill();
@@ -521,16 +560,11 @@ export async function restartEngine(preferredPort = DEFAULT_PORT): Promise<Engin
     child = null;
   }
 
-  // 2. 等旧端口彻底释放（进程退出有延迟，最多 ~6s）
-  emit({ status: "starting", port: currentPort, url: `http://127.0.0.1:${currentPort}` });
-  const deadline = Date.now() + 6000;
-  while (Date.now() < deadline) {
-    if (!(await probePort(currentPort, 400))) break;
-    await new Promise((r) => setTimeout(r, 200));
-  }
+  // 2. 强杀占用端口的进程（外部实例/旧 GUI 实例）并等端口释放
+  await killPortOwner(targetPort);
 
-  // 3. 重新启动（内部自行处理复用 / spawn / 健康检查，并在就绪后 emit running）
-  return startEngine(preferredPort);
+  // 3. force 启动：跳过复用探测，用原端口重新 spawn（新 bin.js / 新配置生效）
+  return startEngine(targetPort, true);
 }
 
 /** 当前端口 */

@@ -41,6 +41,7 @@ import {
   clearLatestVersionCache,
   listInstalledKernels,
   removeKernel,
+  kernelRootDir,
 } from "./updater";
 
 /** 默认 Tauri appDataDir 返回值（Windows 带尾反斜杠） */
@@ -430,5 +431,11 @@ describe("listInstalledKernels / removeKernel", () => {
     const r = await removeKernel("0.1.0-rc.6");
     expect(r.ok).toBe(false);
     expect(r.error).toMatch(/EACCES/);
+  });
+
+  it("回归：appDataDir 无尾反斜杠时 kernelRootDir 仍拼对路径（tauri 2.11 实测返回无尾斜杠）", async () => {
+    // 无尾斜杠的 appDataDir（真实 Tauri 2 行为）→ 不能拼成 ...com.dsh.desktopkernel
+    pathMocks.appDataDir.mockResolvedValue("C:\\Users\\demo\\AppData\\Roaming\\com.dsh.desktop");
+    expect(await kernelRootDir()).toBe("C:\\Users\\demo\\AppData\\Roaming\\com.dsh.desktop\\kernel");
   });
 });

@@ -25,6 +25,8 @@
         { "name": "node", "cmd": "node", "args": true },
         { "name": "npm", "cmd": "npm", "args": true },
         { "name": "pnpm", "cmd": "pnpm", "args": true },
+        { "name": "netstat", "cmd": "netstat", "args": true },
+        { "name": "taskkill", "cmd": "taskkill", "args": true },
         { "name": "winget", "cmd": "winget", "args": true },
         { "name": "dsh", "cmd": "dsh", "args": true },
         { "name": "dsh.cmd", "cmd": "dsh.cmd", "args": true }
