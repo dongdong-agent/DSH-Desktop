@@ -12,8 +12,9 @@
 // ============================================================
 import { Command, type Child } from "@tauri-apps/plugin-shell";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
-import { exists, readDir, writeTextFile } from "@tauri-apps/plugin-fs";
-import { homeDir } from "@tauri-apps/api/path";
+import { exists, readDir, readTextFile, writeTextFile } from "@tauri-apps/plugin-fs";
+import { appDataDir, homeDir } from "@tauri-apps/api/path";
+import { compareVersions, kernelRootDir, normalizeDshVersion, runCommand } from "./updater";
 import type { EngineHealth } from "./types";
 
 /** 诊断日志（落盘系统临时目录 dsh-spawn.log；WebView console 不输出到终端，靠文件看错误） */
@@ -50,9 +51,47 @@ const NPX_CLI_JS = "C:\\Program Files\\nodejs\\node_modules\\npm\\bin\\npx-cli.j
 /**
  * 已验版本清单：与当前 GUI 协议 / 自装插件验证过兼容的引擎版本。
  * 官方发新内核后，新版本不在清单里 → UI 会提示「新内核未验证」并可一键回滚到本清单中
- * 最后一个版本；确认新版本兼容后，把版本号追加到本数组即可解除提示。
+ * 最后一个版本；确认新版本兼容后，UI 点「标记已验证」即可追加（写入配置文件
+ * %APPDATA%\com.dsh.desktop\verified-versions.json，无需改代码重新打包）。
+ * 配置文件不存在/损坏时回退内置默认清单。
  */
-const VERIFIED_VERSIONS = ["0.1.0-rc.7"];
+const DEFAULT_VERIFIED_VERSIONS = ["0.1.0-rc.7"];
+
+/** 已验证版本白名单（内存缓存：启动时从配置文件加载，运行时可追加） */
+let verifiedVersions: string[] = [...DEFAULT_VERIFIED_VERSIONS];
+
+/** 白名单配置文件路径（JSON 字符串数组） */
+async function verifiedVersionsPath(): Promise<string> {
+  return `${await appDataDir()}verified-versions.json`;
+}
+
+/** 从配置文件加载白名单（应用启动时调用一次；失败/不存在时用内置默认） */
+export async function loadVerifiedVersions(): Promise<string[]> {
+  try {
+    const raw = await readTextFile(await verifiedVersionsPath());
+    const parsed = JSON.parse(raw) as unknown;
+    if (Array.isArray(parsed) && parsed.every((x) => typeof x === "string")) {
+      verifiedVersions = parsed.map((s) => normalizeDshVersion(s));
+      return [...verifiedVersions];
+    }
+  } catch {
+    /* 配置文件缺失/损坏 → 默认清单 */
+  }
+  verifiedVersions = [...DEFAULT_VERIFIED_VERSIONS];
+  return [...verifiedVersions];
+}
+
+/** 把版本追加进白名单（更新内存 + 写配置文件；写失败不阻断本次生效） */
+export async function addVerifiedVersion(v: string): Promise<string[]> {
+  const norm = normalizeDshVersion(v);
+  if (!verifiedVersions.includes(norm)) verifiedVersions.push(norm);
+  try {
+    await writeTextFile(await verifiedVersionsPath(), JSON.stringify(verifiedVersions, null, 2));
+  } catch {
+    /* 写失败仅影响下次启动（回退默认），内存清单照常生效 */
+  }
+  return [...verifiedVersions];
+}
 
 /** 固定引擎版本：null = 跟随官方最新（默认）；非 null = 只使用该版本 */
 let pinnedVersion: string | null = null;
@@ -61,20 +100,21 @@ let pinnedVersion: string | null = null;
 export function pinEngineVersion(v: string | null): void {
   pinnedVersion = v;
   versionCache = null; // 版本缓存失效，下次重新探测
+  dshBinJsCache = undefined; // bin.js 探测结果随版本变化，一并失效
 }
 
 export function getPinnedEngineVersion(): string | null {
   return pinnedVersion;
 }
 
-/** 该版本是否在已验证兼容清单里 */
+/** 该版本是否在已验证兼容清单里（版本号先归一化，避免 v 前缀导致误判未验证） */
 export function isVerifiedVersion(v: string): boolean {
-  return VERIFIED_VERSIONS.includes(v);
+  return verifiedVersions.includes(normalizeDshVersion(v));
 }
 
 /** 回滚目标：已验证清单最后一个版本 */
 export function rollbackVersion(): string | null {
-  return VERIFIED_VERSIONS.length > 0 ? VERIFIED_VERSIONS[VERIFIED_VERSIONS.length - 1] : null;
+  return verifiedVersions.length > 0 ? verifiedVersions[verifiedVersions.length - 1] : null;
 }
 /** 候选启动命令（按优先级）：
  * 直接 spawn 简单命令名（capabilities 的 shell:allow-execute 里用
@@ -85,29 +125,66 @@ export function rollbackVersion(): string | null {
  * 4. `dsh.cmd`（npm 的 cmd shim）
  */
 
-/** 运行时探测本机 pnpm 全局目录里的 dsh bin.js（用 homeDir() 定位，不硬编码用户名） */
+/** 运行时探测 dsh bin.js（candidateCommands 的最高优先级）：
+ *  1. GUI 托管内核目录 %APPDATA%\com.dsh.desktop\kernel\<ver>\...（版本并存，优先最高/指定版本）
+ *  2. 本机 pnpm 全局目录 @deepseek-ai+dsh@*（用户手动 pnpm add -g 的版本）
+ *  targetVersion 省略 → 探测「当前最优」版本（结果缓存）；
+ *  给定 → 精确匹配该版本（pin/回滚时使用，不命中缓存）。
+ */
 let dshBinJsCache: string | null | undefined;
-async function findDshBinJs(): Promise<string | null> {
-  if (dshBinJsCache !== undefined) return dshBinJsCache;
-  dshBinJsCache = null;
+async function findDshBinJs(targetVersion?: string | null): Promise<string | null> {
+  if (targetVersion == null && dshBinJsCache !== undefined) return dshBinJsCache;
+  if (targetVersion == null) dshBinJsCache = null;
   try {
-    // Tauri 环境：homeDir() 返回当前用户主目录（跨用户通用）
-    const home = await homeDir();
-    // 尝试常见 pnpm global 目录（含 MSYS 变体 C:\c\Users\...）
-    const candidates = [
-      `${home}AppData\\Local\\pnpm\\global\\5\\.pnpm`,
-      `C:\\c\\Users\\${home.split("\\").pop() ?? ""}\\AppData\\Local\\pnpm\\global\\5\\.pnpm`,
-    ];
+    // 1) GUI 托管内核目录（版本并存：已装版本里选最高，或精确指定版本）
+    try {
+      const root = await kernelRootDir();
+      if (await exists(root).catch(() => false)) {
+        const entries = await readDir(root).catch(() => []);
+        const dirs = entries.filter((e) => e.isDirectory && /^\d+\.\d+\.\d+/.test(e.name));
+        if (targetVersion) {
+          if (dirs.some((d) => d.name === targetVersion)) {
+            const bin = `${root}\\${targetVersion}\\node_modules\\@deepseek-ai\\dsh\\lib\\bin.js`;
+            if (await exists(bin).catch(() => false)) return bin;
+          }
+        } else {
+          const best = dirs.map((d) => d.name).sort((a, b) => compareVersions(b, a))[0];
+          if (best) {
+            const bin = `${root}\\${best}\\node_modules\\@deepseek-ai\\dsh\\lib\\bin.js`;
+            if (await exists(bin).catch(() => false)) {
+              dshBinJsCache = bin;
+              return bin;
+            }
+          }
+        }
+      }
+    } catch {
+      /* 内核目录不可用（浏览器环境） */
+    }
+
+    // 2) 本机 pnpm 全局目录（Tauri 环境：homeDir() 返回当前用户主目录，跨用户通用）
+    // 注意：homeDir() 不带尾反斜杠（dirs crate），且 Windows 上 pnpm 装在 MSYS 路径变体
+    // C:\c\Users\<user>\...（真实存在）——两处候选都要拼对用户名，否则探测静默失败
+    const home = (await homeDir().catch(() => "")) || "";
+    const userName = home.split(/[\\/]/).filter(Boolean).pop() ?? "";
+    const candidates = home
+      ? [
+          `${home.replace(/\\$/, "")}\\AppData\\Local\\pnpm\\global\\5\\.pnpm`,
+          `C:\\c\\Users\\${userName}\\AppData\\Local\\pnpm\\global\\5\\.pnpm`,
+        ]
+      : [];
     for (const base of candidates) {
       try {
         if (await exists(base)) {
-          // 扫描 @deepseek-ai+dsh@* 目录
+          // 扫描 @deepseek-ai+dsh@* 目录（pin 时只匹配对应版本目录）
           const entries = await readDir(base).catch(() => []);
-          const dshDir = entries.find((e) => e.name.startsWith("@deepseek-ai+dsh@"));
+          const dshDir = targetVersion
+            ? entries.find((e) => e.name.startsWith(`@deepseek-ai+dsh@${targetVersion}_`))
+            : entries.find((e) => e.name.startsWith("@deepseek-ai+dsh@"));
           if (dshDir) {
             const bin = `${base}\\${dshDir.name}\\node_modules\\@deepseek-ai\\dsh\\lib\\bin.js`;
             if (await exists(bin).catch(() => false)) {
-              dshBinJsCache = bin;
+              if (targetVersion == null) dshBinJsCache = bin;
               return bin;
             }
           }
@@ -117,7 +194,7 @@ async function findDshBinJs(): Promise<string | null> {
       }
     }
   } catch {
-    /* homeDir unavailable (browser env) */
+    /* env unavailable */
   }
   return null;
 }
@@ -137,11 +214,15 @@ const MANAGED_CREDENTIAL_ENVS: Record<string, string> = {
   RKAPI_API_KEY: "",
   VOLCENGINE_API_KEY: "",
   WECOM_BOT_SECRET: "",
+  OPENROUTER_API_KEY: "",
 };
 
 function candidateCommands(args: string[], localBin: string | null): Array<[string, string[]]> {
   const cmds: Array<[string, string[]]> = [];
-  // 若探测到本机 bin.js，作为最高优先级
+  // 若探测到 bin.js，作为最高优先级。
+  // 注：localBin 由 findDshBinJs(pinnedVersion) 传入——pin 了版本时已精确匹配该版本的
+  // bin.js（GUI 内核目录 / pnpm 全局对应版本），修复了旧实现「本地旧版本永远遮蔽
+  // pin/npx 兜底、回滚不生效」的问题。
   if (localBin) {
     cmds.unshift(["node", [localBin, ...args]]);
   }
@@ -308,22 +389,23 @@ export function clearDshVersionCache(): void {
   versionCache = null;
 }
 
-/** 读取 dsh 版本（一次调用，缓存；多级回退） */
+/** 读取 dsh 版本（一次调用，缓存；多级回退）。pin 了版本时探测的是被 pin 的版本。
+ * 每个候选命令限时 15s（runCommand 超时会 kill 子进程）——实测 npx 兜底在 Windows
+ * 无缓存时会触发 npm 下载 dsh 依赖树（504 包）死循环，不限时 GUI 会永久卡在检测中。 */
+const VERSION_PROBE_TIMEOUT_MS = 15_000;
 let versionCache: string | null = null;
 export async function getDshVersion(): Promise<string> {
   if (versionCache) return versionCache;
-  const localBin = await findDshBinJs();
+  const localBin = await findDshBinJs(pinnedVersion);
   for (const [prog, cmdArgs] of candidateCommands(["--version"], localBin)) {
-    try {
-      const c = Command.create(prog, cmdArgs);
-      const out = await c.execute();
-      const v = out.stdout?.trim() || out.stderr?.trim();
-      if (v && /v?\d+\.\d+/.test(v)) {
-        versionCache = v;
-        return v;
-      }
-    } catch {
-      /* try next candidate */
+    const out = await runCommand(prog, cmdArgs, VERSION_PROBE_TIMEOUT_MS);
+    const v = out?.stdout?.trim() || out?.stderr?.trim() || "";
+    if (out.code === 0 && v && /v?\d+\.\d+/.test(v)) {
+      versionCache = v;
+      return v;
+    }
+    if (out.code !== 0) {
+      diag("版本探测候选失败:", prog, cmdArgs[0], "code=", out.code, out.stderr.slice(0, 200));
     }
   }
   versionCache = "unknown";
@@ -360,7 +442,7 @@ export async function startEngine(preferredPort = DEFAULT_PORT): Promise<EngineH
 
   const args = ["--profile", "web", "--port", String(port), "--host", "127.0.0.1"];
 
-  for (const [prog, cmdArgs] of candidateCommands(args, await findDshBinJs())) {
+  for (const [prog, cmdArgs] of candidateCommands(args, await findDshBinJs(pinnedVersion))) {
     diag("尝试候选:", prog, cmdArgs);
     try {
       // 置空受管密钥环境变量：引擎 resolve 回落到受管存储（见 MANAGED_CREDENTIAL_ENVS）

@@ -10,7 +10,7 @@ import { EngineLauncher } from "./components/EngineLauncher";
 import { CloseDialog } from "./components/CloseDialog";
 import { KeyManagerDialog } from "./components/KeyManagerDialog";
 import { setApiBase } from "./lib/api";
-import { findExistingInstance, onEngineHealth, stopEngine } from "./lib/dshEngine";
+import { findExistingInstance, onEngineHealth, stopEngine, loadVerifiedVersions } from "./lib/dshEngine";
 import { useZoomShortcuts } from "./hooks/useZoomShortcuts";
 
 /**
@@ -116,6 +116,11 @@ export default function App() {
       }
     });
   }, [setHealth]);
+
+  // 启动时加载已验证版本白名单（配置文件 verified-versions.json，缺失时用内置默认）
+  useEffect(() => {
+    void loadVerifiedVersions().catch(() => {});
+  }, []);
 
   // 启动时扫描已有 dsh 实例（网页版 3080 等在跑则直接复用，自动进入主界面）
   useEffect(() => {

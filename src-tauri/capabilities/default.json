@@ -24,6 +24,7 @@
       "allow": [
         { "name": "node", "cmd": "node", "args": true },
         { "name": "npm", "cmd": "npm", "args": true },
+        { "name": "pnpm", "cmd": "pnpm", "args": true },
         { "name": "winget", "cmd": "winget", "args": true },
         { "name": "dsh", "cmd": "dsh", "args": true },
         { "name": "dsh.cmd", "cmd": "dsh.cmd", "args": true }
@@ -41,6 +42,17 @@
     "shell:allow-stdin-write",
     "fs:default",
     {
+      "identifier": "fs:allow-read-dir",
+      "allow": [
+        { "path": "$APPDATA/com.dsh.desktop/**" },
+        { "path": "$HOME/AppData/Local/pnpm/**" }
+      ]
+    },
+    {
+      "identifier": "fs:allow-mkdir",
+      "allow": [{ "path": "$APPDATA/com.dsh.desktop/kernel/**" }]
+    },
+    {
       "identifier": "fs:allow-exists",
       "allow": [{ "path": "C:\\Program Files\\nodejs\\**" }, { "path": "C:\\**" }]
     },
@@ -48,18 +60,30 @@
       "identifier": "fs:allow-read-text-file",
       "allow": [
         { "path": "$HOME/.dsh/**" },
-        { "path": "$APPDATA/KeySwitch/**" }
+        { "path": "$APPDATA/KeySwitch/**" },
+        { "path": "$APPDATA/com.dsh.desktop/**" }
       ]
     },
     {
       "identifier": "fs:allow-write-text-file",
-      "allow": [{ "path": "C:\\Windows\\Temp\\**" }, { "path": "$HOME/.dsh/**" }]
+      "allow": [
+        { "path": "C:\\Windows\\Temp\\**" },
+        { "path": "$HOME/.dsh/**" },
+        { "path": "$APPDATA/com.dsh.desktop/**" }
+      ]
+    },
+    {
+      "identifier": "fs:allow-remove",
+      "allow": [{ "path": "$APPDATA/com.dsh.desktop/kernel/**" }]
     },
     "dialog:default",
     "http:default",
     {
       "identifier": "http:allow-fetch",
-      "allow": [{ "url": "http://127.0.0.1:*" }]
+      "allow": [
+        { "url": "http://127.0.0.1:*" },
+        { "url": "https://registry.npmjs.org/**" }
+      ]
     }
   ]
 }

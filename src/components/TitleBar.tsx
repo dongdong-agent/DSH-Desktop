@@ -1,10 +1,11 @@
 import { useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
-import { confirm } from "@tauri-apps/plugin-dialog";
-import { Minus, Square, X, RotateCw, KeyRound, Bug } from "lucide-react";
+import { confirm, message } from "@tauri-apps/plugin-dialog";
+import { Minus, Square, X, RotateCw, KeyRound, Bug, DownloadCloud, Loader2 } from "lucide-react";
 import { useEngineStore } from "../stores/engineStore";
-import { restartEngine } from "../lib/dshEngine";
+import { getDshVersion, pinEngineVersion, restartEngine } from "../lib/dshEngine";
+import { checkForUpdate, clearLatestVersionCache, installKernel, isValidDshVersion, type KernelUpdateInfo } from "../lib/updater";
 
 /** 无边框窗口标题栏（窗口控制统一在右上角，左侧标题 + 引擎状态） */
 export function TitleBar({ onOpenKeyManager }: { onOpenKeyManager: () => void }) {
@@ -12,6 +13,86 @@ export function TitleBar({ onOpenKeyManager }: { onOpenKeyManager: () => void })
   const appWindow = getCurrentWindow();
   const [restarting, setRestarting] = useState(false);
   const [devtoolsOpen, setDevtoolsOpen] = useState(false);
+
+  // 检测并升级内核：常驻按钮，点击后对比 npm registry 最新版
+  const [updatePhase, setUpdatePhase] = useState<"idle" | "checking" | "installing">("idle");
+  const [updateInfo, setUpdateInfo] = useState<KernelUpdateInfo | null>(null);
+
+  const handleUpdate = async () => {
+    if (updatePhase !== "idle") return;
+    setUpdatePhase("checking");
+    try {
+      // 1. 探测当前内核版本（引擎未安装 / 探测失败时明确提示，绝不误报「已是最新」）
+      const current = await getDshVersion();
+      if (!current || current === "unknown" || !isValidDshVersion(current)) {
+        await message("无法获取当前内核版本（dsh 引擎未安装或探测失败），请先确认引擎可用后再试。", {
+          title: "检查更新",
+          kind: "error",
+        });
+        return;
+      }
+      // 2. 请求 npm registry 对比最新版
+      const info = await checkForUpdate(current);
+      setUpdateInfo(info);
+      if (!info.hasUpdate) {
+        await message(`当前 dsh ${info.current} 已是最新版本`, {
+          title: "检查更新",
+          kind: "info",
+          okLabel: "知道了",
+        });
+        return;
+      }
+      // 3. 用户确认（说明升级后果与注意事项）
+      const ok = await confirm(
+        `发现新内核：\n\n当前  dsh ${info.current}\n最新  dsh ${info.latest}\n\n` +
+          "升级后会自动重启引擎（进程级切换，配置与 API Key 保持不变）。\n" +
+          "若浏览器里开着网页版 dsh（如端口 3080），请先关闭它——重启会优先复用已有实例，升级将不生效。\n" +
+          "新版本若尚未验证兼容性，底部状态栏可一键回滚到已验证版本。",
+        {
+          title: "升级内核",
+          kind: "info",
+          okLabel: "下载并升级",
+          cancelLabel: "取消",
+        },
+      );
+      if (!ok) return;
+      // 4. 下载安装到 GUI 内核目录（幂等 + 冒烟校验，失败给出具体原因）
+      setUpdatePhase("installing");
+      const res = await installKernel(info.latest);
+      if (!res.ok) {
+        await message(`升级失败：${res.error ?? "未知错误"}`, {
+          title: "升级内核",
+          kind: "error",
+        });
+        return;
+      }
+      // 5. 切换 pin + 重启引擎（新进程用新内核启动）
+      pinEngineVersion(info.latest);
+      try {
+        await restartEngine();
+      } catch {
+        await message("新内核已安装完成，但引擎重启失败（错误已显示在状态栏）。可手动点击「重启引擎」按钮重试。", {
+          title: "升级内核",
+          kind: "warning",
+        });
+        return;
+      }
+      // 6. 成功收尾：清 registry 缓存（下次检测立即拿最新）+ 熄灭红点
+      clearLatestVersionCache();
+      setUpdateInfo(null);
+      await message(`内核已升级到 dsh ${info.latest} ✅`, {
+        title: "升级完成",
+        kind: "info",
+      });
+    } catch (e) {
+      await message(`检查更新失败：${e instanceof Error ? e.message : String(e)}`, {
+        title: "检查更新",
+        kind: "error",
+      });
+    } finally {
+      setUpdatePhase("idle");
+    }
+  };
 
   // 打开 / 关闭 WebView 开发者调试器（F12）
   const toggleDevtools = () => {
@@ -61,6 +142,39 @@ export function TitleBar({ onOpenKeyManager }: { onOpenKeyManager: () => void })
       <span className={`h-1.5 w-1.5 rounded-full ${dot}`} />
       <span className="text-xs font-medium text-gray-300">DeepSeek Harness</span>
       <span className="text-[11px] text-gray-500">Desktop</span>
+
+      {/* 检测并升级内核（对比 npm registry；有新版时右上角显示红点徽标） */}
+      <button
+        onClick={() => void handleUpdate()}
+        disabled={updatePhase === "checking" || updatePhase === "installing"}
+        title={
+          updateInfo?.hasUpdate
+            ? `发现新内核 dsh ${updateInfo.latest}，点击下载并升级`
+            : "检测并升级引擎内核"
+        }
+        className={`relative flex h-6 w-7 items-center justify-center rounded transition-colors ${
+          updatePhase === "checking" || updatePhase === "installing"
+            ? "cursor-wait text-gray-500"
+            : updateInfo?.hasUpdate
+              ? "text-purple-300 hover:bg-purple-500/20"
+              : "text-gray-400 hover:bg-white/[0.08] hover:text-purple-300"
+        }`}
+      >
+        {updatePhase === "checking" || updatePhase === "installing" ? (
+          <Loader2 size={13} className="animate-spin" />
+        ) : (
+          <DownloadCloud size={13} />
+        )}
+        {updateInfo?.hasUpdate && updatePhase === "idle" && (
+          <span className="absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full bg-red-500" />
+        )}
+      </button>
+      {/* 检测 / 安装阶段文字（窄窗口自动隐藏，避免挤压标题） */}
+      {updatePhase !== "idle" && (
+        <span className="hidden min-[760px]:inline text-[10px] text-gray-500">
+          {updatePhase === "checking" ? "检测中…" : `正在安装 dsh ${updateInfo?.latest ?? ""}…`}
+        </span>
+      )}
 
       {/* 模型密钥管理（读写受管存储，热生效） */}
       <button
