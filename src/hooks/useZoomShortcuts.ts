@@ -38,6 +38,27 @@ export function useZoomShortcuts() {
       .catch((e) => console.warn("[zoom] setZoom failed:", e));
   }, []);
 
+  // 注销全部缩放快捷键（幂等：已注销则直接返回）
+  const unregisterAll = useCallback(async () => {
+    if (!registeredRef.current) return;
+    const keys = [
+      "CommandOrControl+Shift+Equal",
+      "CommandOrControl+Equal",
+      "CommandOrControl+NumpadAdd",
+      "CommandOrControl+Minus",
+      "CommandOrControl+NumpadSubtract",
+      "CommandOrControl+Digit0",
+    ];
+    for (const s of keys) {
+      try {
+        if (await isRegistered(s)) await unregister(s);
+      } catch {
+        /* ignore */
+      }
+    }
+    registeredRef.current = false;
+  }, []);
+
   // 注册 / 注销全部缩放快捷键（幂等：先查 isRegistered 再操作）
   const registerAll = useCallback(async () => {
     if (registeredRef.current) return;
@@ -79,27 +100,7 @@ export function useZoomShortcuts() {
     } catch {
       /* ignore */
     }
-  }, [applyZoom]);
-
-  const unregisterAll = useCallback(async () => {
-    if (!registeredRef.current) return;
-    const keys = [
-      "CommandOrControl+Shift+Equal",
-      "CommandOrControl+Equal",
-      "CommandOrControl+NumpadAdd",
-      "CommandOrControl+Minus",
-      "CommandOrControl+NumpadSubtract",
-      "CommandOrControl+Digit0",
-    ];
-    for (const s of keys) {
-      try {
-        if (await isRegistered(s)) await unregister(s);
-      } catch {
-        /* ignore */
-      }
-    }
-    registeredRef.current = false;
-  }, []);
+  }, [applyZoom, unregisterAll]);
 
   // 聚焦时注册、失焦时注销；挂载时按当前聚焦状态初始化
   useEffect(() => {
@@ -133,7 +134,6 @@ export function useZoomShortcuts() {
       void unregisterAll();
     };
     // 只挂载一次，不随 zoom 变化重跑
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [registerAll, unregisterAll]);
 
   return { zoom, setZoom: applyZoom };

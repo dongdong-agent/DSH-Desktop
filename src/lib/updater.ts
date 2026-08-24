@@ -173,8 +173,8 @@ export async function fetchLatestVersion(): Promise<string> {
     res = await httpFetch(REGISTRY_LATEST, { cache: "no-store", signal: controller.signal });
   } catch (e) {
     // 超时 abort：httpFetch 的回退 fetch 带同一已中止 signal 也会立即抛 → 统一转成友好提示
-    if (controller.signal.aborted) throw new Error("请求 npm registry 超时，请检查网络后重试");
-    throw e instanceof Error ? e : new Error(String(e));
+    if (controller.signal.aborted) throw new Error("请求 npm registry 超时，请检查网络后重试", { cause: e });
+    throw e instanceof Error ? e : new Error(String(e), { cause: e });
   } finally {
     clearTimeout(timer);
   }
@@ -230,27 +230,7 @@ export async function runCommand(
     let stdout = "";
     let stderr = "";
     // close 事件必须在 spawn 之前注册：命令毫秒级退出时，spawn 的 promise 与 close 可能竞争丢失
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    c.stdout.on("data", (line) => {
-      stdout += line;
-    });
-    c.stderr.on("data", (line) => {
-      stderr += line;
-    });
-    c.on("close", ({ code }) => {
-      if (settled) return;
-      settled = true;
-      if (timer) clearTimeout(timer);
-      resolve({ code: code ?? -1, stdout, stderr });
-    });
-    c.on("error", (errMsg) => {
-      if (settled) return;
-      settled = true;
-      if (timer) clearTimeout(timer);
-      // plugin-shell 的 error 事件载荷是字符串消息（非 Error 对象）
-      resolve({ code: -1, stdout, stderr: typeof errMsg === "string" ? errMsg : String(errMsg) });
-    });
-    timer = setTimeout(() => {
+    const timer = setTimeout(() => {
       if (settled) return;
       settled = true;
       try {
@@ -260,6 +240,25 @@ export async function runCommand(
       }
       resolve({ code: -1, stdout, stderr: stderr + `\n命令执行超时（${Math.round(timeoutMs / 1000)}s），已终止` });
     }, timeoutMs);
+    c.stdout.on("data", (line) => {
+      stdout += line;
+    });
+    c.stderr.on("data", (line) => {
+      stderr += line;
+    });
+    c.on("close", ({ code }) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve({ code: code ?? -1, stdout, stderr });
+    });
+    c.on("error", (errMsg) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      // plugin-shell 的 error 事件载荷是字符串消息（非 Error 对象）
+      resolve({ code: -1, stdout, stderr: typeof errMsg === "string" ? errMsg : String(errMsg) });
+    });
     c.spawn()
       .then((ch) => {
         if (settled) {

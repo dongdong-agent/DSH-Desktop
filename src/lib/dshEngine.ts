@@ -337,7 +337,7 @@ export async function installDsh(): Promise<{ ok: boolean; output: string }> {
 
 let child: Child | null = null;
 let currentPort = DEFAULT_PORT;
-let listeners = new Set<(h: EngineHealth) => void>();
+const listeners = new Set<(h: EngineHealth) => void>();
 
 function emit(health: EngineHealth) {
   listeners.forEach((fn) => {

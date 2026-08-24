@@ -44,7 +44,6 @@ export function StatusBar({
   // 不这么做的话，升级后状态栏会一直显示旧版本（getDshVersion 的缓存已被 pinEngineVersion 清除）
   useEffect(() => {
     if (health.status === "running") refreshVersion();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [health.status]);
 
   // "unknown"（版本探测失败）不是新内核，不显示未验证警告——避免误导用户去回滚。
