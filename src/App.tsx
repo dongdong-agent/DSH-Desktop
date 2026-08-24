@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -29,6 +29,36 @@ export default function App() {
   const [keyManagerOpen, setKeyManagerOpen] = useState(false);
   const appWindow = getCurrentWindow();
 
+  // ── 沉浸模式：隐藏桌面壳的标题栏/状态栏，让内嵌 WebUI 占满窗口 ──
+  const [immersive, setImmersive] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("dsh-desktop-immersive") === "1";
+    } catch {
+      return false;
+    }
+  });
+  /** 鼠标贴到窗口边缘时临时唤出被隐藏的栏 */
+  const [peek, setPeek] = useState(false);
+  /** 进入沉浸模式时的一次性提示 */
+  const [showImmersiveHint, setShowImmersiveHint] = useState(false);
+  const peekTimerRef = useRef<number | undefined>(undefined);
+
+  const toggleImmersive = useCallback(() => {
+    setImmersive((cur) => {
+      const next = !cur;
+      try {
+        localStorage.setItem("dsh-desktop-immersive", next ? "1" : "0");
+      } catch {
+        /* localStorage 不可用时仅本次会话生效 */
+      }
+      if (next) {
+        setShowImmersiveHint(true);
+        window.setTimeout(() => setShowImmersiveHint(false), 3200);
+      }
+      return next;
+    });
+  }, []);
+
   // F12 开发者调试开关：仅在本窗口聚焦时注册全局快捷键，失焦即注销，
   // 避免抢占其他软件的 F12（与缩放快捷键同一作用域修正）。
   useEffect(() => {
@@ -41,6 +71,10 @@ export default function App() {
             void invoke("open_devtools").catch(() => {});
           });
         }
+        // 沉浸模式快捷键：与 F12 同一作用域策略（窗口聚焦期间注册，失焦即注销）
+        if (!(await isReg("CommandOrControl+Shift+H"))) {
+          await regShortcut("CommandOrControl+Shift+H", () => toggleImmersive());
+        }
       } catch {
         /* 注册失败不影响运行时 */
       }
@@ -48,6 +82,7 @@ export default function App() {
     const doUnreg = async () => {
       try {
         if (await isReg("F12")) await unreg("F12").catch(() => {});
+        if (await isReg("CommandOrControl+Shift+H")) await unreg("CommandOrControl+Shift+H").catch(() => {});
       } catch {
         /* ignore */
       }
@@ -70,8 +105,9 @@ export default function App() {
       disposed = true;
       unlisten?.();
       void unreg("F12").catch(() => {});
+      void unreg("CommandOrControl+Shift+H").catch(() => {});
     };
-  }, [appWindow]);
+  }, [appWindow, toggleImmersive]);
 
   // 关闭请求（点 X / Alt+F4 / 托盘退出）→ 拦截并弹出三选一
   useEffect(() => {
@@ -135,6 +171,8 @@ export default function App() {
 
   const running = health.status === "running";
   const engineUrl = health.url || `http://127.0.0.1:${health.port}`;
+  // 沉浸模式下两条栏收起；鼠标贴到窗口边缘（peek）时临时展开
+  const barsVisible = !immersive || peek;
 
   // Ctrl + 滚轮缩放（浏览器习惯；wheel 事件是唯一跨 iframe 冒泡的事件，
   // 挂在容器 div 上即可捕获 iframe 内容区的滚轮——浏览器为支持 Ctrl+滚轮缩放特意如此）
@@ -145,9 +183,43 @@ export default function App() {
     setZoom(Math.round((zoom + delta) * 10) / 10);
   };
 
+  const peekAtEdge = () => {
+    window.clearTimeout(peekTimerRef.current);
+    setPeek(true);
+  };
+  const unpeekLater = () => {
+    peekTimerRef.current = window.setTimeout(() => setPeek(false), 600);
+  };
+
   return (
-    <div className="flex h-screen w-screen flex-col overflow-hidden bg-[rgb(10_10_12)] text-gray-100 select-none">
-      <TitleBar onOpenKeyManager={() => setKeyManagerOpen(true)} />
+    <div className="relative flex h-screen w-screen flex-col overflow-hidden bg-[rgb(10_10_12)] text-gray-100 select-none">
+      {/* 沉浸模式：顶/底 5px 热区，鼠标贴边临时唤出标题栏/状态栏 */}
+      {immersive && !peek && (
+        <div className="absolute inset-x-0 top-0 z-50 h-1.5" onMouseEnter={peekAtEdge} />
+      )}
+      {immersive && !peek && (
+        <div className="absolute inset-x-0 bottom-0 z-50 h-1.5" onMouseEnter={peekAtEdge} />
+      )}
+      {/* 进入沉浸模式的一次性提示 */}
+      {immersive && showImmersiveHint && (
+        <div className="pointer-events-none absolute left-1/2 top-2 z-50 -translate-x-1/2 whitespace-nowrap rounded-full bg-black/70 px-3 py-1 text-[11px] text-gray-200 shadow-lg">
+          沉浸模式已开启：按 Ctrl+Shift+H 或鼠标移到屏幕边缘唤出
+        </div>
+      )}
+
+      <div
+        className={`overflow-hidden transition-[height] duration-200 ease-out ${
+          barsVisible ? "h-9" : "h-0"
+        }`}
+        onMouseEnter={peekAtEdge}
+        onMouseLeave={unpeekLater}
+      >
+        <TitleBar
+          immersive={immersive}
+          onToggleImmersive={toggleImmersive}
+          onOpenKeyManager={() => setKeyManagerOpen(true)}
+        />
+      </div>
       {!running && !launchRequested ? (
         <div className="flex-1 overflow-hidden">
           <EngineLauncher />
@@ -169,7 +241,15 @@ export default function App() {
           )}
         </main>
       )}
-      <StatusBar zoom={zoom} onZoomChange={setZoom} />
+      <div
+        className={`overflow-hidden transition-[height] duration-200 ease-out ${
+          barsVisible ? "h-6" : "h-0"
+        }`}
+        onMouseEnter={peekAtEdge}
+        onMouseLeave={unpeekLater}
+      >
+        <StatusBar zoom={zoom} onZoomChange={setZoom} />
+      </div>
       {closeDialogOpen && (
         <CloseDialog
           onMinimizeToTray={() => {

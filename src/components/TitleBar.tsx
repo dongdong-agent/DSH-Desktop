@@ -2,13 +2,23 @@ import { useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import { confirm, message } from "@tauri-apps/plugin-dialog";
-import { Minus, Square, X, RotateCw, KeyRound, Bug, DownloadCloud, Loader2 } from "lucide-react";
+import { Minus, Square, X, RotateCw, KeyRound, Bug, DownloadCloud, Loader2, Maximize2, Minimize2 } from "lucide-react";
 import { useEngineStore } from "../stores/engineStore";
 import { getDshVersion, pinEngineVersion, restartEngine } from "../lib/dshEngine";
 import { checkForUpdate, clearLatestVersionCache, installKernel, isValidDshVersion, type KernelUpdateInfo } from "../lib/updater";
 
 /** 无边框窗口标题栏（窗口控制统一在右上角，左侧标题 + 引擎状态） */
-export function TitleBar({ onOpenKeyManager }: { onOpenKeyManager: () => void }) {
+export function TitleBar({
+  onOpenKeyManager,
+  immersive = false,
+  onToggleImmersive,
+}: {
+  onOpenKeyManager: () => void;
+  /** 沉浸模式下标题栏本身会被隐藏；此参数仅用于按钮图标/高亮状态 */
+  immersive?: boolean;
+  /** 沉浸模式开关（隐藏/显示标题栏与状态栏） */
+  onToggleImmersive?: () => void;
+}) {
   const health = useEngineStore((s) => s.health);
   const appWindow = getCurrentWindow();
   const [restarting, setRestarting] = useState(false);
@@ -213,6 +223,23 @@ export function TitleBar({ onOpenKeyManager }: { onOpenKeyManager: () => void })
       </button>
 
       <div className="flex-1" data-tauri-drag-region />
+
+      {/* 沉浸模式开关：隐藏/显示标题栏与状态栏（Ctrl+Shift+H 或鼠标贴边唤出） */}
+      <button
+        onClick={onToggleImmersive}
+        title={
+          immersive
+            ? "退出沉浸模式（还原标题栏/状态栏）"
+            : "沉浸模式：隐藏标题栏与状态栏（Ctrl+Shift+H 或鼠标移到屏幕边缘唤出）"
+        }
+        className={`flex h-6 w-7 items-center justify-center rounded transition-colors ${
+          immersive
+            ? "bg-purple-500/20 text-purple-300"
+            : "text-gray-400 hover:bg-white/[0.08] hover:text-purple-300"
+        }`}
+      >
+        {immersive ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
+      </button>
 
       {/* 右侧：窗口控制（最小化 / 最大化 / 关闭） */}
       <button
