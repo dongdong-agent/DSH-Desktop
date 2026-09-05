@@ -15,6 +15,7 @@ import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import { exists, readDir, readTextFile, writeTextFile } from "@tauri-apps/plugin-fs";
 import { appDataDir, homeDir } from "@tauri-apps/api/path";
 import { compareVersions, kernelRootDir, normalizeDshVersion, runCommand } from "./updater";
+import { readCredentials } from "./credentials";
 import type { EngineHealth } from "./types";
 
 /** 诊断日志（落盘系统临时目录 dsh-spawn.log；WebView console 不输出到终端，靠文件看错误） */
@@ -206,23 +207,34 @@ async function findDshBinJs(targetVersion?: string | null): Promise<string | nul
   return null;
 }
 
-/** 受管存储凭据引用清单：启动引擎时把这些环境变量置空，
- * 让引擎 resolve 回落到 ~/.dsh/.credentials.yaml（受管存储）。
+/** 受管存储凭据清单：启动引擎时为这些键注入受管存储里的真值。
  *
  * 背景：引擎凭据优先级是「进程环境变量 > 受管存储 > .env」。
  * 若用户级/系统级环境里残留同名变量（如 KeySwitch 的 env_var 适配器写入的
  * OPENCODE_GO_API_KEY），GUI 面板写入受管存储会被静默遮蔽——改 key 不生效。
- * 置空后受管存储成为唯一来源：面板一键切换热生效，第三方程序/用户改 key
- * 统一走受管存储（本项目声明的稳定入口）。 */
-const MANAGED_CREDENTIAL_ENVS: Record<string, string> = {
-  OPENCODE_GO_API_KEY: "",
-  DEEPSEEK_API_KEY: "",
-  AGNES_API_KEY: "",
-  RKAPI_API_KEY: "",
-  VOLCENGINE_API_KEY: "",
-  WECOM_BOT_SECRET: "",
-  OPENROUTER_API_KEY: "",
-};
+ *
+ * 早期实现是把它们一律置空来保证受管存储生效，但引擎派生的 MCP 子进程
+ * （agnes-mcp / rkapi-mcp 等）只认环境变量、不读受管存储，一律置空会让它们
+ * 启动即失败。现在改为「受管存储有值就写真值，无值才置空」：残留的遮蔽值仍被
+ * 覆盖（受管存储依旧是唯一取值源），只读环境变量的子进程也能拿到可用密钥。 */
+const MANAGED_CREDENTIAL_KEYS = [
+  "OPENCODE_GO_API_KEY",
+  "DEEPSEEK_API_KEY",
+  "AGNES_API_KEY",
+  "RKAPI_API_KEY",
+  "VOLCENGINE_API_KEY",
+  "WECOM_BOT_SECRET",
+  "OPENROUTER_API_KEY",
+];
+
+/** 解析 spawn 引擎时要注入的凭据环境变量（读不到受管存储时全部置空） */
+export async function managedCredentialEnv(): Promise<Record<string, string>> {
+  const stored = await readCredentials().catch(() => []);
+  const byKey = new Map(stored.map((e) => [e.key, e.value]));
+  const env: Record<string, string> = {};
+  for (const key of MANAGED_CREDENTIAL_KEYS) env[key] = byKey.get(key)?.trim() ?? "";
+  return env;
+}
 
 function candidateCommands(args: string[], localBin: string | null): Array<[string, string[]]> {
   const cmds: Array<[string, string[]]> = [];
@@ -456,12 +468,13 @@ export async function startEngine(preferredPort = DEFAULT_PORT, force = false): 
   emit({ status: "starting", port, url: `http://127.0.0.1:${port}` });
 
   const args = ["--profile", "web", "--port", String(port), "--host", "127.0.0.1"];
+  // 候选命令共用同一份凭据环境：受管存储有值即写真值（见 MANAGED_CREDENTIAL_KEYS）
+  const managedEnv = await managedCredentialEnv();
 
   for (const [prog, cmdArgs] of candidateCommands(args, await findDshBinJs(pinnedVersion))) {
     diag("尝试候选:", prog, cmdArgs);
     try {
-      // 置空受管密钥环境变量：引擎 resolve 回落到受管存储（见 MANAGED_CREDENTIAL_ENVS）
-      const c = Command.create(prog, cmdArgs, { env: MANAGED_CREDENTIAL_ENVS });
+      const c = Command.create(prog, cmdArgs, { env: managedEnv });
       c.stdout.on("data", (line) => {
         console.log("[dsh]", line);
       });

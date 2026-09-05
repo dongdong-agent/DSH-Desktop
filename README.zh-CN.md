@@ -4,7 +4,7 @@
 
 <p align="center">
   <img alt="平台: Windows" src="https://img.shields.io/badge/platform-Windows%20x64-0078D6?logo=windows&logoColor=white"/>
-  <img alt="版本" src="https://img.shields.io/badge/version-0.1.0-purple"/>
+  <img alt="版本" src="https://img.shields.io/badge/version-0.1.12-purple"/>
   <img alt="Tauri" src="https://img.shields.io/badge/Tauri-2.0-24C8D8?logo=tauri&logoColor=white"/>
   <img alt="React 19" src="https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=white"/>
   <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-green"/>
@@ -30,7 +30,7 @@ DeepSeek Harness Desktop 是一个**围绕官方 DeepSeek Harness WebUI 的轻�
 
 ## 🚀 快速开始
 
-1. 从 [Releases](https://github.com/dongdong-agent/DSH-Desktop/releases) 下载最新安装包（`DSH Desktop_0.1.0_x64-setup.exe`，Windows x64），或直接复制绿色版 `dsh-desktop.exe` 到任意位置。
+1. 从 [Releases](https://github.com/dongdong-agent/DSH-Desktop/releases) 下载最新安装包（`DSH Desktop_0.1.12_x64-setup.exe`，Windows x64），或直接复制绿色版 `dsh-desktop.exe` 到任意位置。
 2. **启动应用**。启动页会显示环境检测结果（Node.js / npx / dsh 引擎）。
 3. 点击 **启动引擎**。应用会自动 spawn 引擎（`dsh --profile web`，监听 `127.0.0.1:17800` 或其他空闲端口）并自动加载官方 WebUI。
 4. 像网页版一样使用——会话、插件、轨迹，应有尽有。
@@ -45,16 +45,16 @@ DeepSeek Harness Desktop 是一个**围绕官方 DeepSeek Harness WebUI 的轻�
 
 | 版本 | 是什么 | 大小 | 需要 Node.js | 默认对话语言 |
 |---|---|---|---|---|
-| **v0.1.0** | **Tauri 桌面壳**——原生 GUI（标题栏/状态栏/缩放），内嵌官方 WebUI | 2.5 MB | ✅ 需要（引擎运行时拉取） | 跟随引擎 |
-| **v0.1.0-chinese** | **中文全量便携版**——内置 Node.js + dsh + 中文 persona（简体中文思考/对话） | 52 MB | ❌ 不需要 | 🇨🇳 **中文** |
-| **v0.1.0-chinese-lite** | **中文简版**——dsh + 中文 persona，用系统 Node.js | 31 MB | ✅ 需要 | 🇨🇳 **中文** |
-| **v0.1.0-full-english** | **英文全量便携版**——内置 Node.js + dsh（官方原版，未修改） | 52 MB | ❌ 不需要 | 🇬🇧 英文 |
+| **v0.1.12** | **Tauri 桌面壳**——原生 GUI（标题栏/状态栏/缩放），内嵌官方 WebUI | 2.5 MB | ✅ 需要（引擎运行时拉取） | 跟随引擎 |
+|| **v0.1.12-chinese** | **中文全量便携版**——内置 Node.js + dsh + 中文 persona（简体中文思考/对话） | 52 MB | ❌ 不需要 | 🇨🇳 **中文** |
+|| **v0.1.12-chinese-lite** | **中文简版**——dsh + 中文 persona，用系统 Node.js | 31 MB | ✅ 需要 | 🇨🇳 **中文** |
+|| **v0.1.12-full-english** | **英文全量便携版**——内置 Node.js + dsh（官方原版，未修改） | 52 MB | ❌ 不需要 | 🇬🇧 英文 |
 
 **怎么选？**
-- **学员没装 Node.js** → `v0.1.0-chinese`（`DSH-Desktop-Chinese-Setup-v0.1.0.exe`）或 `v0.1.0-full-english`（`DSH-Desktop-Full-English-v0.1.0.exe`）——零依赖，双击即用
-- **想要中文对话、已装 Node.js** → `v0.1.0-chinese-lite`（31 MB，最小中文包）
-- **想要中文对话、没装 Node.js** → `v0.1.0-chinese`
-- **已有 Node 环境 / 想要原生 GUI 壳** → `v0.1.0`（2.5 MB）
+- **学员没装 Node.js** → `v0.1.12-chinese`（`DSH-Desktop-Chinese-Setup-v0.1.12.exe`）或 `v0.1.12-full-english`（`DSH-Desktop-Full-English-v0.1.12.exe`）——零依赖，双击即用
+- **想要中文对话、已装 Node.js** → `v0.1.12-chinese-lite`（31 MB，最小中文包）
+- **想要中文对话、没装 Node.js** → `v0.1.12-chinese`
+- **已有 Node 环境 / 想要原生 GUI 壳** → `v0.1.12`（2.5 MB）
 
 > 三个版本共用同一引擎（`@deepseek-ai/dsh@0.1.0-rc.6`），数据都在 `~/.dsh/`，互不影响。
 
@@ -136,7 +136,7 @@ npm run build              # tsc + vite build
 npm run tauri build        # 生产打包（NSIS 安装包 + 绿色版 exe）
 ```
 
-产物：`src-tauri/target/release/bundle/nsis/DSH Desktop_0.1.0_x64-setup.exe`
+产物：`src-tauri/target/release/bundle/nsis/DSH Desktop_0.1.12_x64-setup.exe`
 
 ## 📁 项目结构
 

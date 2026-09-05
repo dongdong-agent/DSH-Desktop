@@ -8,7 +8,7 @@
 
 <p align="center">
   <img alt="Platform: Windows" src="https://img.shields.io/badge/platform-Windows%20x64-0078D6?logo=windows&logoColor=white"/>
-  <img alt="Version" src="https://img.shields.io/badge/version-0.1.0-purple"/>
+  <img alt="Version" src="https://img.shields.io/badge/version-0.1.12-purple"/>
   <img alt="Built with Tauri" src="https://img.shields.io/badge/Tauri-2.0-24C8D8?logo=tauri&logoColor=white"/>
   <img alt="React 19" src="https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=white"/>
   <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-green"/>
@@ -24,16 +24,16 @@ Three variants are published. Pick the one that fits your students / users:
 
 | Release | What it is | Size | Node.js required | Default chat language |
 |---|---|---|---|---|
-| **v0.1.0** | **Tauri shell** — native GUI (TitleBar/StatusBar/zoom) that embeds the official WebUI | 2.5 MB | ✅ **Yes** (engine fetched at runtime) | Follows engine persona |
-| **v0.1.0-chinese** | **Full portable engine, Chinese-first** — bundled Node.js + dsh + Chinese persona (简体中文思考/对话) | 52 MB | ❌ No | 🇨🇳 **Chinese** |
-| **v0.1.0-chinese-lite** | **Lite Chinese engine** — dsh + Chinese persona, uses system Node.js | 31 MB | ✅ Yes | 🇨🇳 **Chinese** |
-| **v0.1.0-full-english** | **Full portable engine, official English** — bundled Node.js + dsh (unmodified) | 52 MB | ❌ No | 🇬🇧 English |
+| **v0.1.12** | **Tauri shell** — native GUI (TitleBar/StatusBar/zoom) that embeds the official WebUI | 2.5 MB | ✅ **Yes** (engine fetched at runtime) | Follows engine persona |
+|| **v0.1.12-chinese** | **Full portable engine, Chinese-first** — bundled Node.js + dsh + Chinese persona (简体中文思考/对话) | 52 MB | ❌ No | 🇨🇳 **Chinese** |
+|| **v0.1.12-chinese-lite** | **Lite Chinese engine** — dsh + Chinese persona, uses system Node.js | 31 MB | ✅ Yes | 🇨🇳 **Chinese** |
+|| **v0.1.12-full-english** | **Full portable engine, official English** — bundled Node.js + dsh (unmodified) | 52 MB | ❌ No | 🇬🇧 English |
 
 **Which one to use?**
-- **Students without Node.js** → `v0.1.0-chinese` (`DSH-Desktop-Chinese-Setup-v0.1.0.exe`) or `v0.1.0-full-english` (`DSH-Desktop-Full-English-v0.1.0.exe`) — zero dependencies, double-click to run
-- **Chinese-first conversations, has Node.js** → `v0.1.0-chinese-lite` (31 MB, smallest Chinese package)
-- **Chinese-first conversations, no Node.js** → `v0.1.0-chinese`
-- **Existing Node.js environment / want the native GUI** → `v0.1.0` (2.5 MB shell)
+- **Students without Node.js** → `v0.1.12-chinese` (`DSH-Desktop-Chinese-Setup-v0.1.12.exe`) or `v0.1.12-full-english` (`DSH-Desktop-Full-English-v0.1.12.exe`) — zero dependencies, double-click to run
+- **Chinese-first conversations, has Node.js** → `v0.1.12-chinese-lite` (31 MB, smallest Chinese package)
+- **Chinese-first conversations, no Node.js** → `v0.1.12-chinese`
+- **Existing Node.js environment / want the native GUI** → `v0.1.12` (2.5 MB shell)
 
 > All three share the same engine (`@deepseek-ai/dsh@0.1.0-rc.6`). Data lives in `~/.dsh/` regardless of variant.
 
@@ -138,7 +138,7 @@ npm run build              # tsc + vite build
 npm run tauri build        # production bundle (NSIS installer + portable exe)
 ```
 
-Output: `src-tauri/target/release/bundle/nsis/DSH Desktop_0.1.0_x64-setup.exe`
+Output: `src-tauri/target/release/bundle/nsis/DSH Desktop_0.1.12_x64-setup.exe`
 
 ## 📁 Project layout
 

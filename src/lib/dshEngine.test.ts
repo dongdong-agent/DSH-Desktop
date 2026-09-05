@@ -50,6 +50,7 @@ import {
   loadVerifiedVersions,
   addVerifiedVersion,
   restartEngine,
+  managedCredentialEnv,
 } from "./dshEngine";
 
 const APP_DATA = "C:\\Users\\demo\\AppData\\Roaming\\com.dsh.desktop\\";
@@ -331,5 +332,54 @@ describe("getDshVersion", () => {
     expect(v).toContain("0.1.0-rc.6");
     const nodeArgs = shellMocks.create.mock.calls.find(([p]: string[]) => p === "node")?.[1] as string[];
     expect(nodeArgs?.[0]).toContain("@deepseek-ai+dsh@0.1.0-rc.6_");
+  });
+});
+
+describe("managedCredentialEnv（受管凭据注入引擎子进程环境）", () => {
+  /** 受管存储真实格式：密钥嵌在 refs 下，另有 version 结构字段 */
+  const CRED_YAML = [
+    "version: 1",
+    "refs:",
+    "  DEEPSEEK_API_KEY: sk-managed-deepseek",
+    "  AGNES_API_KEY:  sk-managed-agnes  ",
+    "  RKAPI_API_KEY: sk-managed-rkapi",
+    "",
+  ].join("\n");
+
+  it("受管存储里有值的键注入真值，让只读环境变量的 MCP 子进程能启动", async () => {
+    fsMocks.readTextFile.mockResolvedValue(CRED_YAML);
+    const env = await managedCredentialEnv();
+    expect(env.DEEPSEEK_API_KEY).toBe("sk-managed-deepseek");
+    expect(env.AGNES_API_KEY).toBe("sk-managed-agnes");
+    expect(env.RKAPI_API_KEY).toBe("sk-managed-rkapi");
+  });
+
+  it("受管存储里没有的受管键仍置空，防止用户级残留值遮蔽受管存储", async () => {
+    fsMocks.readTextFile.mockResolvedValue(CRED_YAML);
+    const env = await managedCredentialEnv();
+    expect(env.OPENROUTER_API_KEY).toBe("");
+    expect(env.WECOM_BOT_SECRET).toBe("");
+  });
+
+  it("只注入受管清单里的键，version/refs 等结构字段不混入", async () => {
+    fsMocks.readTextFile.mockResolvedValue(CRED_YAML);
+    const env = await managedCredentialEnv();
+    expect(Object.keys(env).sort()).toEqual(
+      [
+        "AGNES_API_KEY",
+        "DEEPSEEK_API_KEY",
+        "OPENCODE_GO_API_KEY",
+        "OPENROUTER_API_KEY",
+        "RKAPI_API_KEY",
+        "VOLCENGINE_API_KEY",
+        "WECOM_BOT_SECRET",
+      ].sort(),
+    );
+  });
+
+  it("受管存储读不到时全部置空且不抛错（引擎仍可启动）", async () => {
+    fsMocks.readTextFile.mockRejectedValue(new Error("文件不存在"));
+    const env = await managedCredentialEnv();
+    expect(Object.values(env).every((v) => v === "")).toBe(true);
   });
 });
