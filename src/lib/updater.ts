@@ -222,6 +222,7 @@ export async function runCommand(
   prog: string,
   args: string[],
   timeoutMs: number,
+  onLine?: (line: string) => void,
 ): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
     const c = Command.create(prog, args);
@@ -240,11 +241,20 @@ export async function runCommand(
       }
       resolve({ code: -1, stdout, stderr: stderr + `\n命令执行超时（${Math.round(timeoutMs / 1000)}s），已终止` });
     }, timeoutMs);
+    const emit = (chunk: unknown) => {
+      if (!onLine) return;
+      for (const l of String(chunk).split(/\r?\n/)) {
+        const t = l.trim();
+        if (t) onLine(t.slice(0, 200));
+      }
+    };
     c.stdout.on("data", (line) => {
       stdout += line;
+      emit(line);
     });
     c.stderr.on("data", (line) => {
       stderr += line;
+      emit(line);
     });
     c.on("close", ({ code }) => {
       if (settled) return;
@@ -313,8 +323,13 @@ async function detectPackageManager(): Promise<"pnpm.cmd" | "npm.cmd"> {
  * 装完执行冒烟：node bin.js --version 输出中提取的版本号必须与目标版本精确相等
  * （includes 会把 0.1.1-rc.20 误判为 0.1.1-rc.2，必须精确匹配）。
  * 包管理器：优先 pnpm（--dir），npm 兜底（--prefix，需先建目录）。
+ * `onProgress`：可选进度回调——阶段切换与包管理器的实时输出行都会透传，供 UI 展示。
  */
-export async function installKernel(version: string): Promise<{ ok: boolean; error?: string }> {
+export async function installKernel(
+  version: string,
+  onProgress?: (msg: string) => void,
+): Promise<{ ok: boolean; error?: string }> {
+  const progress = (msg: string) => onProgress?.(msg);
   if (installBusy) return { ok: false, error: "已有内核安装任务进行中，请稍候" };
   installBusy = true;
   try {
@@ -322,28 +337,34 @@ export async function installKernel(version: string): Promise<{ ok: boolean; err
     const root = await kernelRootDir();
     const target = `${root}\\${version}`;
     // npm 11 的 --prefix 要求目标目录已存在（不会自动创建，实测 ENOENT）——先建目录（pnpm --dir 同样需要）
+    progress(`创建内核目录 ${target}`);
     try {
       await mkdir(target, { recursive: true });
     } catch (e) {
       return { ok: false, error: `创建内核目录失败：${e instanceof Error ? e.message : String(e)}` };
     }
     const pm = await detectPackageManager();
+    progress(`使用 ${pm} 安装 dsh@${version}（依赖较多，可能需要数分钟）…`);
     const install =
       pm === "pnpm.cmd"
         ? await runCommand(
             "pnpm.cmd",
-            ["add", "--dir", target, `${DSH_PKG}@${version}`],
+            // append-only reporter：非 TTY 下也逐行输出进度，供 UI 实时展示
+            ["add", "--dir", target, `${DSH_PKG}@${version}`, "--reporter=append-only"],
             INSTALL_TIMEOUT_MS,
+            (l) => progress(l),
           )
         : await runCommand(
             "npm.cmd",
             ["install", "--prefix", target, `${DSH_PKG}@${version}`, "--no-audit", "--no-fund", "--loglevel=error"],
             INSTALL_TIMEOUT_MS,
+            (l) => progress(l),
           );
     if (install.code !== 0) {
       return { ok: false, error: (install.stdout || install.stderr || "").slice(-300) || `${pm} 安装退出码 ${install.code}` };
     }
     // 冒烟校验：node bin.js --version，从输出中提取版本号精确比对
+    progress("安装完成，冒烟校验中…");
     const bin = await kernelBinPath(version);
     const smoke = await runCommand("node", [bin, "--version"], SMOKE_TIMEOUT_MS);
     const printed = (smoke.stdout || smoke.stderr || "").trim();

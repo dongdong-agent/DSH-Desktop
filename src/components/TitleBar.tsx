@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import { confirm, message } from "@tauri-apps/plugin-dialog";
@@ -27,6 +27,11 @@ export function TitleBar({
   // 检测并升级内核：常驻按钮，点击后对比 npm registry 最新版
   const [updatePhase, setUpdatePhase] = useState<"idle" | "checking" | "installing">("idle");
   const [updateInfo, setUpdateInfo] = useState<KernelUpdateInfo | null>(null);
+  /** 安装进度：阶段 / 包管理器实时输出行 / 已运行秒数（浮层展示） */
+  const [installProgress, setInstallProgress] = useState("");
+  const [installLog, setInstallLog] = useState<string[]>([]);
+  const [installElapsed, setInstallElapsed] = useState(0);
+  const installTimerRef = useRef(0);
 
   const handleUpdate = async () => {
     if (updatePhase !== "idle") return;
@@ -68,7 +73,17 @@ export function TitleBar({
       if (!ok) return;
       // 4. 下载安装到 GUI 内核目录（幂等 + 冒烟校验，失败给出具体原因）
       setUpdatePhase("installing");
-      const res = await installKernel(info.latest);
+      setInstallLog([]);
+      setInstallElapsed(0);
+      const t0 = Date.now();
+      installTimerRef.current = window.setInterval(
+        () => setInstallElapsed(Math.round((Date.now() - t0) / 1000)),
+        1000,
+      );
+      const res = await installKernel(info.latest, (msg) => {
+        setInstallProgress(msg);
+        setInstallLog((prev) => [...prev.slice(-40), msg]);
+      });
       if (!res.ok) {
         await message(`升级失败：${res.error ?? "未知错误"}`, {
           title: "升级内核",
@@ -100,7 +115,10 @@ export function TitleBar({
         kind: "error",
       });
     } finally {
+      window.clearInterval(installTimerRef.current);
       setUpdatePhase("idle");
+      setInstallLog([]);
+      setInstallProgress("");
     }
   };
 
@@ -182,8 +200,34 @@ export function TitleBar({
       {/* 检测 / 安装阶段文字（窄窗口自动隐藏，避免挤压标题） */}
       {updatePhase !== "idle" && (
         <span className="hidden min-[760px]:inline text-[10px] text-gray-500">
-          {updatePhase === "checking" ? "检测中…" : `正在安装 dsh ${updateInfo?.latest ?? ""}…`}
+          {updatePhase === "checking"
+            ? "检测中…"
+            : `正在安装 dsh ${updateInfo?.latest ?? ""}…（${installElapsed}s）`}
         </span>
+      )}
+
+      {/* 内核安装进度浮层：阶段 + 包管理器实时输出（安装可能持续数分钟，必须给反馈） */}
+      {updatePhase === "installing" && (
+        <div className="fixed right-3 top-10 z-50 w-[420px] rounded-lg border border-white/10 bg-[rgb(20_20_24)] p-3 shadow-2xl">
+          <div className="flex items-center gap-2 text-xs text-gray-200">
+            <Loader2 size={13} className="animate-spin text-purple-300" />
+            <span>
+              正在安装 dsh {updateInfo?.latest ?? ""}（已运行 {installElapsed}s）
+            </span>
+          </div>
+          <div className="mt-1 truncate text-[10px] text-gray-500">{installProgress || "准备中…"}</div>
+          <div className="mt-2 h-20 overflow-y-auto rounded bg-black/40 p-2 font-mono text-[10px] leading-4 text-gray-400">
+            {installLog.length === 0
+              ? "等待包管理器输出…"
+              : installLog
+                  .slice(-6)
+                  .map((l, i) => (
+                    <div key={`${i}-${l}`} className="truncate" title={l}>
+                      {l}
+                    </div>
+                  ))}
+          </div>
+        </div>
       )}
 
       {/* 模型密钥管理（读写受管存储，热生效） */}
