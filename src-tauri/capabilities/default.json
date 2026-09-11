@@ -36,6 +36,9 @@
       "identifier": "shell:allow-spawn",
       "allow": [
         { "name": "node", "cmd": "node", "args": true },
+        { "name": "npm", "cmd": "npm", "args": true },
+        { "name": "pnpm", "cmd": "pnpm", "args": true },
+        { "name": "pnpm.cmd", "cmd": "pnpm.cmd", "args": true },
         { "name": "dsh", "cmd": "dsh", "args": true },
         { "name": "dsh.cmd", "cmd": "dsh.cmd", "args": true }
       ]
