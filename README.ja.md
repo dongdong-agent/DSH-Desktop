@@ -88,7 +88,7 @@ npm run tauri build     # .app（macOS）/ .deb、.AppImage（Linux）を src-ta
 - **フロントエンド**: React 19 + TypeScript + Vite 6 + Tailwind CSS 4 + Zustand
 - **デスクトップシェル**: Tauri 2（Rust）、フレームレスウィンドウ + カスタムタイトルバー
 - **エンジンライフサイクル**（`src/lib/dshEngine.ts`）: 既存インスタンスのスキャン → 空きポート選択 → spawn（`node` + ローカル `bin.js`、フォールバックは `npx` / `dsh` / `dsh.cmd`）→ ヘルスチェック → 停止
-- **エンジンビュー**（`src-tauri/src/lib.rs`）: 子 webview（`mount_engine_view` / `set_engine_view_bounds` / `unmount_engine_view`）を内容領域に重ねて配置。シェルがホスト要素を計測し、ウィンドウリサイズやズームに追従させます
+- **エンジンビュー**（`src-tauri/src/lib.rs`）: エンジン起動中はメインウィンドウの webview がエンジンページへ直接ナビゲートします（トップレベルドキュメント）。初回読み込み時に自己署名セッション Cookie を注入します（`src/lib/engineAuth.ts` を参照）
 - **セッション認証**（`src/lib/engineAuth.ts`）: `~/.dsh/.credentials.yaml` のブラウザーセッション署名鍵を読み、エンジンが検証できる Cookie を生成してページ読み込み完了ごとに注入します
 - **診断**: spawn の過程と失敗原因は `%TEMP%\dsh-spawn.log` に記録
 

@@ -88,7 +88,7 @@ npm run tauri build     # erzeugt .app (macOS) / .deb/.AppImage (Linux) in src-t
 - **Frontend**: React 19 + TypeScript + Vite 6 + Tailwind CSS 4 + Zustand
 - **Desktop-Hülle**: Tauri 2 (Rust), rahmenloses Fenster mit benutzerdefinierter Titelleiste
 - **Engine-Lebenszyklus** (`src/lib/dshEngine.ts`): vorhandene Instanzen suchen → freien Port wählen → starten (`node` + lokales `bin.js`, Fallbacks `npx` / `dsh` / `dsh.cmd`) → Healthcheck → stoppen
-- **Engine-Ansicht** (`src-tauri/src/lib.rs`): Ein Kind-Webview (`mount_engine_view` / `set_engine_view_bounds` / `unmount_engine_view`) wird über dem Inhaltsbereich positioniert; die Hülle misst das Host-Element und hält die Ansicht bei Fenstergrößen- und Zoomänderungen synchron
+- **Engine-Ansicht** (`src-tauri/src/lib.rs`): Läuft der Motor, navigiert das Hauptfenster direkt zur Motorseite (Dokument auf oberster Ebene); beim ersten Laden wird ein selbst signiertes Sitzungs-Cookie injiziert (siehe `src/lib/engineAuth.ts`)
 - **Sitzungs-Authentifizierung** (`src/lib/engineAuth.ts`): liest den Signaturschlüssel der Browser-Sitzung aus `~/.dsh/.credentials.yaml`, erzeugt ein von der Engine prüfbares Cookie und injiziert es bei jedem abgeschlossenen Seitenaufbau
 - **Diagnose**: Startversuche und Fehler werden in `%TEMP%\dsh-spawn.log` protokolliert
 

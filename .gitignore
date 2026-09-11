@@ -23,6 +23,7 @@ Thumbs.db
 
 # 工具
 .reasonix/
+.codebuddy/
 
 # Hermes 编辑临时文件
 .hermes-tmp.*

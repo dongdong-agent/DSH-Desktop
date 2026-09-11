@@ -111,7 +111,7 @@ npm run tauri build     # 产出 .app（macOS）/ .deb、.AppImage（Linux）到
 - **前端**：React 19 + TypeScript + Vite 6 + Tailwind CSS 4 + Zustand
 - **桌面壳**：Tauri 2（Rust），无边框窗口 + 自定义标题栏
 - **引擎生命周期**（`src/lib/dshEngine.ts`）：扫描已有实例 → 挑选空闲端口 → spawn（`node` + 本机 `bin.js`，备选 `npx` / `dsh` / `dsh.cmd`）→ 健康检查 → 停止
-- **引擎内容区**（`src-tauri/src/lib.rs`）：子 webview（`mount_engine_view` / `set_engine_view_bounds` / `unmount_engine_view`）铺在内容区上；壳测量宿主元素尺寸，跟随窗口缩放与 Ctrl+滚轮缩放
+- **引擎界面**（`src-tauri/src/lib.rs`）：引擎运行中时主窗口直接导航到引擎页面（顶层文档）；首次加载注入自签会话 Cookie（见 `src/lib/engineAuth.ts`）
 - **会话鉴权**（`src/lib/engineAuth.ts`）：从 `~/.dsh/.credentials.yaml` 读取浏览器会话签名密钥，自签一份引擎可校验的 Cookie，每次页面加载完成时注入
 - **诊断**：spawn 过程与失败原因写入 `%TEMP%\dsh-spawn.log`
 

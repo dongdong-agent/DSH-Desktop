@@ -62,7 +62,12 @@
     },
     {
       "identifier": "fs:allow-exists",
-      "allow": [{ "path": "C:\\Program Files\\nodejs\\**" }, { "path": "C:\\**" }]
+      "allow": [
+        { "path": "C:\\Program Files\\nodejs\\**" },
+        { "path": "$HOME/AppData/Roaming/npm/**" },
+        { "path": "$HOME/AppData/Local/pnpm/**" },
+        { "path": "$HOME/AppData/Roaming/com.dsh.desktop/**" }
+      ]
     },
     {
       "identifier": "fs:allow-read-text-file",
