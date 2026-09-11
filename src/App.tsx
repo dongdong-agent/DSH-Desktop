@@ -27,6 +27,12 @@ export default function App() {
   const [closeDialogOpen, setCloseDialogOpen] = useState(false);
   const [keyManagerOpen, setKeyManagerOpen] = useState(false);
   const appWindow = getCurrentWindow();
+  /** 管理模式：从托盘「打开管理界面」进入（URL 带 ?manage=1）。
+   *  引擎运行中窗口会自动跳转引擎页，壳的升级/密钥/状态栏入口不可见；
+   *  管理模式暂停该跳转，方便使用升级 / 回滚 / 清理 / 密钥等功能。 */
+  const [manageMode, setManageMode] = useState(() =>
+    new URLSearchParams(window.location.search).has("manage"),
+  );
 
   // ── 沉浸模式：隐藏桌面壳的标题栏/状态栏，让内嵌 WebUI 占满窗口 ──
   const [immersive, setImmersive] = useState<boolean>(() => {
@@ -178,7 +184,7 @@ export default function App() {
   // 注意：导航会替换掉壳的 JS 上下文（标题栏/状态栏不再渲染，属预期行为），
   // 所以导航前必须注销全部全局快捷键，否则会永久残留抢占系统快捷键。
   useEffect(() => {
-    if (!running) return;
+    if (!running || manageMode) return;
     let cancelled = false;
     void (async () => {
       const secret = await readBrowserSessionSecret();
@@ -214,7 +220,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [running, engineUrl, health.port]);
+  }, [running, engineUrl, health.port, manageMode]);
 
   return (
     <div className="relative flex h-screen w-screen flex-col overflow-hidden bg-[rgb(10_10_12)] text-gray-100 select-none">
@@ -245,7 +251,28 @@ export default function App() {
           onOpenKeyManager={() => setKeyManagerOpen(true)}
         />
       </div>
-      {!running && !launchRequested ? (
+      {manageMode ? (
+        running ? (
+          <div className="flex flex-1 flex-col items-center justify-center gap-3">
+            <div className="text-sm text-gray-200">管理模式：标题栏「升级内核」、状态栏「回滚 / 清理 / 密钥」均可用</div>
+            <button
+              onClick={() => setManageMode(false)}
+              className="rounded-lg bg-purple-500 px-6 py-2 text-sm font-semibold text-white transition-colors hover:bg-purple-400"
+            >
+              进入引擎界面
+            </button>
+          </div>
+        ) : (
+          <div className="flex flex-1 flex-col overflow-hidden">
+            <div className="pt-4 text-center text-[11px] text-gray-600">
+              管理模式——启动引擎后可点击「进入引擎界面」返回 WebUI
+            </div>
+            <div className="flex-1 overflow-hidden">
+              <EngineLauncher />
+            </div>
+          </div>
+        )
+      ) : !running && !launchRequested ? (
         <div className="flex-1 overflow-hidden">
           <EngineLauncher />
         </div>

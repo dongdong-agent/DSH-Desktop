@@ -85,10 +85,17 @@ pub fn run() {
             quit_app
         ])
         .setup(|app| {
-            // 系统托盘：最小化到托盘后可从这里恢复窗口 / 退出
+            // 系统托盘：最小化到托盘后可从这里恢复窗口 / 打开管理界面 / 退出
             let show = MenuItem::with_id(app, "show", "显示窗口", true, None::<&str>)?;
+            let manage = MenuItem::with_id(
+                app,
+                "manage",
+                "打开管理界面（引擎升级 / 密钥 / 状态栏）",
+                true,
+                None::<&str>,
+            )?;
             let quit = MenuItem::with_id(app, "quit", "退出（不影响后台引擎）", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show, &quit])?;
+            let menu = Menu::with_items(app, &[&show, &manage, &quit])?;
 
             TrayIconBuilder::with_id("main-tray")
                 .icon(app.default_window_icon().unwrap().clone())
@@ -100,6 +107,24 @@ pub fn run() {
                         if let Some(w) = app.get_webview_window("main") {
                             let _ = w.show();
                             let _ = w.set_focus();
+                        }
+                    }
+                    // 回到壳 UI（带 ?manage=1 标记，前端据此暂停自动跳转引擎页）：
+                    // 引擎运行中窗口直接显示 WebUI，壳的升级/密钥/状态栏入口不可见，
+                    // 托盘这里提供随时回到管理界面的通道。
+                    "manage" => {
+                        if let Some(w) = app.get_webview_window("main") {
+                            let _ = w.show();
+                            let _ = w.set_focus();
+                            // dev 模式壳来自 vite dev server，生产才是 tauri.localhost
+                            let base = if cfg!(debug_assertions) {
+                                "http://localhost:1422/?manage=1"
+                            } else {
+                                "http://tauri.localhost/?manage=1"
+                            };
+                            if let Ok(u) = tauri::Url::parse(base) {
+                                let _ = w.navigate(u);
+                            }
                         }
                     }
                     // 引擎是共享的 node 进程，退出 GUI 不停引擎
