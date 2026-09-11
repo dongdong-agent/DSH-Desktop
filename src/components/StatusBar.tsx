@@ -2,8 +2,6 @@ import { useEffect, useState } from "react";
 import { confirm, message } from "@tauri-apps/plugin-dialog";
 import { ShieldCheck, Trash2 } from "lucide-react";
 import { useEngineStore } from "../stores/engineStore";
-import { useSessionStore } from "../stores/sessionStore";
-import { useChatStore } from "../stores/chatStore";
 import {
   getDshVersion,
   restartEngine,
@@ -20,7 +18,7 @@ import {
   normalizeDshVersion,
 } from "../lib/updater";
 
-/** 底部状态栏：引擎状态 / 模型 / 会话数 / 缩放级别 */
+/** 底部状态栏：引擎状态 / 内核版本治理 / 缩放级别 */
 export function StatusBar({
   zoom = 1,
   onZoomChange,
@@ -29,8 +27,6 @@ export function StatusBar({
   onZoomChange?: (next: number) => void;
 }) {
   const health = useEngineStore((s) => s.health);
-  const sessions = useSessionStore((s) => s.sessions);
-  const generating = useChatStore((s) => s.generating);
   const [version, setVersion] = useState("");
   const [rolling, setRolling] = useState(false);
   const [marking, setMarking] = useState(false);
@@ -219,14 +215,6 @@ export function StatusBar({
               </button>
             )}
           </span>
-        </>
-      )}
-      <span className="text-gray-700">|</span>
-      <span>{sessions.length} 个会话</span>
-      {generating && (
-        <>
-          <span className="text-gray-700">|</span>
-          <span className="text-purple-400">● 生成中</span>
         </>
       )}
       <div className="flex-1" />

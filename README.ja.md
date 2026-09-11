@@ -16,12 +16,13 @@
 
 ## ✨ これは何？
 
-DeepSeek Harness Desktop は、**公式 DeepSeek Harness WebUI を包む軽量なネイティブシェル**です。UI を再発明せず、`iframe` で公式 Web インターフェースを埋め込み、デスクトップアプリに必要な機能を補完します:
+DeepSeek Harness Desktop は、**公式 DeepSeek Harness WebUI を包む軽量なネイティブシェル**です。UI を再発明せず、公式 Web インターフェースを**子 webview**（オリジンが `127.0.0.1` であるトップレベル文書。クロスサイトの `iframe` ではない）でホストし、デスクトップアプリに必要な機能を補完します:
 
 - **ワンクリックでエンジン起動** — ローカル環境（`node` + `dsh`）を自動検出し、空きポートを選んで正しい profile でエンジンを起動します。
 - **既存インスタンスの再利用** — すでに dsh web インスタンスが起動していれば直接接続し、二重起動を防ぎます（`~/.dsh` セッションの競合を回避）。
 - **環境チェック + ワンクリックインストール** — Node.js や `dsh` が無い場合は、起動ページで不足を明示し、その場でインストールできます。
-- **フレームレスウィンドウ** — カスタムタイトルバー（ドラッグ / 最小化 / 最大化 / 閉じる）+ ステータスバー（エンジン状態・ポート・セッション数）。
+- **フレームレスウィンドウ** — カスタムタイトルバー（ドラッグ / 最小化 / 最大化 / 閉じる）+ ステータスバー（エンジン状態・ポート・ズーム）。
+- **エンジンセッション認証** — エンジン ≥ 0.1.5 は未認証リクエストを拒否し、`SameSite=Strict` のセッション Cookie を発行します。シェルは管理対象クレデンシャルの署名鍵でその Cookie を自署し、子 webview に注入するため、WebUI は 401 ではなく正常に読み込まれます。
 - **ローカル永続化** — セッションはすべて `~/.dsh/sessions/` に保存され、アプリを閉じてもデータは失われません。
 
 セッション、トレース、プラグイン、Agent プリセット、設定など、それ以外はすべて**公式 DeepSeek Harness WebUI** のフル機能をそのまま利用できます。
@@ -76,17 +77,19 @@ npm run tauri build     # .app（macOS）/ .deb、.AppImage（Linux）を src-ta
 ┌────────────────────────────────────────────────────┐
 │  TitleBar（フレームレス + エンジン状態ドット）        │
 ├────────────────────────────────────────────────────┤
-│  iframe 全画面 → 公式 DeepSeek Harness WebUI        │
+│  子 webview → 公式 DeepSeek Harness WebUI           │
 │  セッション / トレース / プラグイン / 設定           │
+│  127.0.0.1 のトップレベル文書として描画             │
 ├────────────────────────────────────────────────────┤
-│  StatusBar（エンジン状態 · ポート · セッション数）    │
+│  StatusBar（エンジン状態 · ポート · ズーム）         │
 └────────────────────────────────────────────────────┘
 ```
 
 - **フロントエンド**: React 19 + TypeScript + Vite 6 + Tailwind CSS 4 + Zustand
 - **デスクトップシェル**: Tauri 2（Rust）、フレームレスウィンドウ + カスタムタイトルバー
 - **エンジンライフサイクル**（`src/lib/dshEngine.ts`）: 既存インスタンスのスキャン → 空きポート選択 → spawn（`node` + ローカル `bin.js`、フォールバックは `npx` / `dsh` / `dsh.cmd`）→ ヘルスチェック → 停止
-- **ネットワーク**: HTTP RPC（`POST /api/<method>`）+ WebSocket イベントストリーム（`@tauri-apps/plugin-http` 使用で CORS を完全回避）
+- **エンジンビュー**（`src-tauri/src/lib.rs`）: 子 webview（`mount_engine_view` / `set_engine_view_bounds` / `unmount_engine_view`）を内容領域に重ねて配置。シェルがホスト要素を計測し、ウィンドウリサイズやズームに追従させます
+- **セッション認証**（`src/lib/engineAuth.ts`）: `~/.dsh/.credentials.yaml` のブラウザーセッション署名鍵を読み、エンジンが検証できる Cookie を生成してページ読み込み完了ごとに注入します
 - **診断**: spawn の過程と失敗原因は `%TEMP%\dsh-spawn.log` に記録
 
 ## 🧰 技術スタック
@@ -96,8 +99,8 @@ npm run tauri build     # .app（macOS）/ .deb、.AppImage（Linux）を src-ta
 | デスクトップシェル | Tauri 2（Rust）、フレームレス + カスタムタイトルバー |
 | フロントエンド | React 19 + TypeScript + Vite 6 |
 | スタイル | Tailwind CSS 4 |
-| 状態管理 | Zustand 5（engine / session / chat / ui） |
-| 埋め込み UI | 公式 DeepSeek Harness WebUI（iframe） |
+| 状態管理 | Zustand 5（`engine` ストアのみ。シェルは会話/セッション状態を持ちません） |
+| 埋め込み UI | 公式 DeepSeek Harness WebUI（Tauri **子 webview**） |
 
 ## 🛠 開発
 
@@ -119,26 +122,31 @@ npm run tauri build        # プロダクションビルド（NSIS インスト�
 
 ```
 src/
-├── App.tsx                 # シェルレイアウト: TitleBar + iframe(公式UI) + StatusBar
+├── App.tsx                 # シェルレイアウト: TitleBar + 子 webview ホスト + StatusBar
 ├── lib/
 │   ├── dshEngine.ts        # ★ エンジンライフサイクル / spawn フォールバックチェーン / 診断ログ
-│   └── api.ts              # HTTP RPC + WS イベントストリーム
-├── stores/                 # zustand stores（engine / ui / session / chat）
+│   ├── engineAuth.ts       # エンジンセッション Cookie の自署（管理対象クレデンシャル）
+│   ├── updater.ts          # カーネルのバージョン確認 / インストール / ロールバック
+│   └── types.ts            # 共有型（EngineHealth）
+├── stores/                 # zustand ストア（engine）
 └── components/
     ├── TitleBar.tsx        # カスタムタイトルバー
-    ├── StatusBar.tsx       # エンジン状態・ポート・セッション数
-    └── EngineLauncher.tsx  # 起動ページ: 環境チェック + インストール + 起動
+    ├── StatusBar.tsx       # エンジン状態・カーネル版 / ロールバック・ズーム
+    ├── EngineLauncher.tsx  # 起動ページ: 環境チェック + インストール + 起動
+    ├── CloseDialog.tsx     # 終了 / トレイに最小化 / エンジン停止して終了
+    └── KeyManagerDialog.tsx# 管理対象 API キー / クレデンシャル管理
 src-tauri/
 ├── capabilities/default.json  # ★ 権限（shell spawn scope、ウィンドウ操作）
 ├── tauri.conf.json            # ウィンドウ / バンドル設定
-└── src/lib.rs                 # プラグイン登録
+└── src/lib.rs                 # 子 webview（mount/bounds/unmount）+ プラグイン登録
 ```
 
 ## 🔍 トラブルシューティング
 
 - **タイトルバーのボタンやドラッグが効かない** — `src-tauri/capabilities/default.json` に `core:window:*` 権限（`allow-minimize` / `allow-toggle-maximize` / `allow-close` / `allow-start-dragging`）が必要です。capabilities はバイナリにコンパイルされるため、変更後は再ビルドしてください。
 - **エンジン起動に失敗** — `%TEMP%\dsh-spawn.log` を確認。主な原因: `shell:allow-spawn` の欠落、scope のプログラムホワイトリスト欠落、scope エントリに `cmd` フィールドが無い（非 sidecar は必須）。ログに正確なエラーが記録されます。
-- **WebUI が真っ白** — 全リクエストは `@tauri-apps/plugin-http` 経由です（WebView2 はクロスオリジン fetch を CORS でブロック）。ネイティブ fetch に置き換えないでください。
+- **WebUI が真っ白 / 「authentication required」** — エンジン ≥ 0.1.5 はセッション Cookie を要求し、それを `SameSite=Strict` として発行します。シェルページ（`tauri.localhost`）内の `iframe` はクロスサイト文脈になるため Cookie が送信されません。だからこそエンジン UI は**子 webview** でホストしています。401 ページが出る場合は、`~/.dsh/.credentials.yaml` に `client-connection/browser-session` が残っているか確認してください（署名鍵が無いと Cookie を生成できません）。
+- **ズーム後にエンジンビューがずれる** — シェルは `set_engine_view_bounds` を呼ぶ前に、現在のズーム率で CSS ピクセルを論理ピクセルへ換算します。レイアウトを変更する場合は、ホスト要素の寸法とズーム換算を揃えてください。
 
 ## 📄 ライセンス
 

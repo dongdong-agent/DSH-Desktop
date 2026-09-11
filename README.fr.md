@@ -16,12 +16,13 @@
 
 ## ✨ Qu'est-ce que c'est ?
 
-DeepSeek Harness Desktop est une **coquille native légère** autour de la WebUI officielle de DeepSeek Harness. Plutôt que de réinventer l'interface, il intègre l'interface web officielle dans un `iframe` et ajoute ce qu'une application de bureau devrait avoir :
+DeepSeek Harness Desktop est une **coquille native légère** autour de la WebUI officielle de DeepSeek Harness. Plutôt que de réinventer l'interface, elle héberge l'interface web officielle dans une **webview enfant** — un document de premier niveau dont l'origine *est* `127.0.0.1`, et non un `iframe` inter-sites — et ajoute ce qu'une application de bureau devrait avoir :
 
 - **Démarrage du moteur en un clic** — détecte votre environnement local (`node` + `dsh`), choisit un port libre et lance le moteur avec le bon profil.
 - **Réutilisation des instances existantes** — si une instance web DeepSeek Harness tourne déjà sur votre machine, l'application s'y connecte directement au lieu d'en démarrer une copie (plus de conflits sur le stockage des sessions `~/.dsh`).
 - **Vérification de l'environnement + installation en un clic** — Node.js ou le moteur `dsh` manquant ? Le lanceur vous indique exactement ce qui manque et peut l'installer pour vous.
-- **Fenêtre sans bordure** — barre de titre personnalisée (glisser / réduire / agrandir / fermer) et barre d'état indiquant l'état du moteur, le port et le nombre de sessions.
+- **Fenêtre sans bordure** — barre de titre personnalisée (glisser / réduire / agrandir / fermer) et barre d'état indiquant l'état du moteur, le port et le niveau de zoom.
+- **Sessions moteur authentifiées** — les moteurs ≥ 0.1.5 refusent les requêtes non authentifiées et émettent un cookie de session `SameSite=Strict`. La coquille signe elle-même ce cookie avec la clé du magasin d'identifiants géré et l'injecte dans la webview enfant : la WebUI se charge au lieu d'afficher une page 401.
 - **Persistance locale** — toutes les sessions sont stockées sur disque dans `~/.dsh/sessions/` : fermer l'application ne perd jamais votre travail.
 
 Tout le reste — sessions, trajectoires, plugins, préréglages d'agents — est la **WebUI officielle de DeepSeek Harness** dans toute sa fidélité, puisque l'application se contente de l'héberger.
@@ -76,18 +77,19 @@ npm run tauri build     # produit .app (macOS) / .deb/.AppImage (Linux) dans src
 ┌────────────────────────────────────────────────────┐
 │  TitleBar (barre de titre sans bordure + point)    │
 ├────────────────────────────────────────────────────┤
-│  iframe plein écran → WebUI officielle DeepSeek    │
-│  Harness — sessions / trajectoires / plugins /     │
-│  réglages                                          │
+│  webview enfant → WebUI officielle DeepSeek Harness│
+│  — sessions / trajectoires / plugins / réglages    │
+│  document de premier niveau sur 127.0.0.1          │
 ├────────────────────────────────────────────────────┤
-│  StatusBar (état du moteur · port · sessions)      │
+│  StatusBar (état du moteur · port · zoom)          │
 └────────────────────────────────────────────────────┘
 ```
 
 - **Frontend** : React 19 + TypeScript + Vite 6 + Tailwind CSS 4 + Zustand
 - **Coquille de bureau** : Tauri 2 (Rust), fenêtre sans bordure avec barre de titre personnalisée
 - **Cycle de vie du moteur** (`src/lib/dshEngine.ts`) : recherche d'instances existantes → choix d'un port libre → lancement (`node` + `bin.js` local, avec replis `npx` / `dsh` / `dsh.cmd`) → contrôle de santé → arrêt
-- **Réseau** : RPC HTTP (`POST /api/<method>`) + flux d'événements WebSocket via `@tauri-apps/plugin-http` (évite totalement le CORS de WebView2)
+- **Vue moteur** (`src-tauri/src/lib.rs`) : une webview enfant (`mount_engine_view` / `set_engine_view_bounds` / `unmount_engine_view`) est positionnée au-dessus de la zone de contenu ; la coquille mesure l'élément hôte et synchronise la vue avec le redimensionnement et le zoom
+- **Authentification de session** (`src/lib/engineAuth.ts`) : lit la clé de signature de session du navigateur dans `~/.dsh/.credentials.yaml`, génère un cookie vérifiable par le moteur et l'injecte à chaque fin de chargement de page
 - **Diagnostic** : les tentatives et échecs de lancement sont consignés dans `%TEMP%\dsh-spawn.log`
 
 ## 🧰 Pile technique
@@ -97,8 +99,8 @@ npm run tauri build     # produit .app (macOS) / .deb/.AppImage (Linux) dans src
 | Coquille de bureau | Tauri 2 (Rust), sans bordure + barre personnalisée |
 | Frontend | React 19 + TypeScript + Vite 6 |
 | Styles | Tailwind CSS 4 |
-| État | Zustand 5 (stores engine / session / chat / ui) |
-| UI intégrée | WebUI officielle DeepSeek Harness (iframe) |
+| État | Zustand 5 (un seul store `engine` — la coquille ne conserve aucun état de chat/session) |
+| UI intégrée | WebUI officielle DeepSeek Harness (Tauri **webview enfant**) |
 
 ## 🛠 Développement
 
@@ -120,26 +122,31 @@ Sortie : `src-tauri/target/release/bundle/nsis/DSH Desktop_0.1.0_x64-setup.exe`
 
 ```
 src/
-├── App.tsx                 # coquille : TitleBar + iframe(UI officielle) + StatusBar
+├── App.tsx                 # coquille : TitleBar + hôte de la webview enfant + StatusBar
 ├── lib/
 │   ├── dshEngine.ts        # ★ cycle de vie du moteur / chaîne de lancement / journal
-│   └── api.ts              # RPC HTTP + flux WS
-├── stores/                 # stores zustand (engine / ui / session / chat)
+│   ├── engineAuth.ts       # cookie de session moteur auto-signé (identifiants gérés)
+│   ├── updater.ts          # vérification de version du noyau / installation / rollback
+│   └── types.ts            # types partagés (EngineHealth)
+├── stores/                 # store zustand (engine)
 └── components/
     ├── TitleBar.tsx        # barre de titre personnalisée
-    ├── StatusBar.tsx       # état du moteur · port · sessions
-    └── EngineLauncher.tsx  # lanceur : vérification + installation + démarrage
+    ├── StatusBar.tsx       # état du moteur · version du noyau / rollback · zoom
+    ├── EngineLauncher.tsx  # lanceur : vérification + installation + démarrage
+    ├── CloseDialog.tsx     # fermer / réduire dans la barre / arrêter le moteur et quitter
+    └── KeyManagerDialog.tsx# gestion des clés API / identifiants
 src-tauri/
 ├── capabilities/default.json  # ★ permissions (scope shell spawn, contrôles fenêtre)
 ├── tauri.conf.json            # configuration fenêtre / paquet
-└── src/lib.rs                 # enregistrement des plugins
+└── src/lib.rs                 # webview enfant (mount/bounds/unmount) + enregistrement des plugins
 ```
 
 ## 🔍 Dépannage
 
 - **Les boutons ou le glissement de la barre de titre ne fonctionnent pas** — les permissions `core:window:*` (`allow-minimize` / `allow-toggle-maximize` / `allow-close` / `allow-start-dragging`) doivent figurer dans `src-tauri/capabilities/default.json`. Les capabilities sont compilées dans le binaire : recompilez après modification.
 - **Le moteur ne démarre pas** — consultez `%TEMP%\dsh-spawn.log`. Causes courantes : absence de `shell:allow-spawn`, liste blanche de programmes du scope absente, ou entrées de scope sans le champ `cmd` (obligatoire pour les entrées non sidecar).
-- **WebUI blanche** — l'application utilise `@tauri-apps/plugin-http` pour toutes les requêtes car WebView2 bloque les fetch inter-origines (CORS). Ne le remplacez pas par `fetch` natif.
+- **WebUI blanche / « authentication required »** — les moteurs ≥ 0.1.5 exigent un cookie de session et le marquent `SameSite=Strict`. Un `iframe` dans la page de la coquille (`tauri.localhost`) est un contexte inter-sites : le cookie n'y serait jamais envoyé — c'est précisément pourquoi l'UI du moteur est hébergée dans une **webview enfant**. Si une page 401 apparaît, vérifiez que `~/.dsh/.credentials.yaml` contient toujours `client-connection/browser-session` ; sans cette clé de signature, aucun cookie ne peut être généré.
+- **Vue moteur décalée après un zoom** — la coquille convertit les pixels CSS en pixels logiques via le facteur de zoom courant avant d'appeler `set_engine_view_bounds`. En cas de changement de mise en page, gardez synchronisés les bornes de l'élément hôte et la conversion de zoom.
 
 ## 📄 Licence
 

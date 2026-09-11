@@ -16,12 +16,13 @@
 
 ## ✨ ¿Qué es?
 
-DeepSeek Harness Desktop es un **envoltorio nativo ligero** alrededor de la WebUI oficial de DeepSeek Harness. En lugar de reinventar la interfaz, incrusta la web oficial en un `iframe` y añade lo que una aplicación de escritorio debería tener:
+DeepSeek Harness Desktop es un **envoltorio nativo ligero** alrededor de la WebUI oficial de DeepSeek Harness. En lugar de reinventar la interfaz, aloja la web oficial en una **webview hija** — un documento de nivel superior cuyo origen *es* `127.0.0.1`, no un `iframe` entre sitios — y añade lo que una aplicación de escritorio debería tener:
 
 - **Arranque del motor con un clic** — detecta tu entorno local (`node` + `dsh`), elige un puerto libre y lanza el motor con el perfil correcto.
 - **Reutiliza instancias existentes** — si ya hay una instancia web de DeepSeek Harness ejecutándose, la app se conecta directamente en lugar de duplicarla (sin peleas por el almacenamiento de sesiones en `~/.dsh`).
 - **Autocomprobación del entorno + instalación con un clic** — ¿Faltan Node.js o el motor `dsh`? El lanzador te dice exactamente qué falta y puede instalarlo por ti.
-- **Ventana sin bordes** — barra de título personalizada (arrastrar / minimizar / maximizar / cerrar) y una barra de estado con el estado del motor, el puerto y el número de sesiones.
+- **Ventana sin bordes** — barra de título personalizada (arrastrar / minimizar / maximizar / cerrar) y una barra de estado con el estado del motor, el puerto y el nivel de zoom.
+- **Sesiones de motor autenticadas** — los motores ≥ 0.1.5 rechazan las peticiones no autenticadas y emiten una cookie de sesión `SameSite=Strict`. El envoltorio firma esa cookie con la clave del almacén de credenciales gestionado y la inyecta en la webview hija, de modo que la WebUI carga en lugar de mostrar una página 401.
 - **Persistencia local** — todas las sesiones viven en disco en `~/.dsh/sessions/`, así que cerrar la app nunca pierde tu trabajo.
 
 Todo lo demás — sesiones, trayectorias, plugins, ajustes — es la **WebUI oficial de DeepSeek Harness** con toda su fidelidad, ya que la app simplemente la aloja.
@@ -76,18 +77,19 @@ npm run tauri build     # genera .app (macOS) / .deb/.AppImage (Linux) en src-ta
 ┌────────────────────────────────────────────────────┐
 │  TitleBar (barra de título personalizada + punto)  │
 ├────────────────────────────────────────────────────┤
-│  iframe a pantalla completa → WebUI oficial        │
-│  DeepSeek Harness (sesiones / trayectorias /       │
-│  plugins / ajustes)                                │
+│  webview hija → WebUI oficial DeepSeek Harness     │
+│  (sesiones / trayectorias / plugins / ajustes)     │
+│  como documento de nivel superior en 127.0.0.1     │
 ├────────────────────────────────────────────────────┤
-│  StatusBar (estado del motor · puerto · sesiones)  │
+│  StatusBar (estado del motor · puerto · zoom)      │
 └────────────────────────────────────────────────────┘
 ```
 
 - **Frontend**: React 19 + TypeScript + Vite 6 + Tailwind CSS 4 + Zustand
 - **Cáscara de escritorio**: Tauri 2 (Rust), ventana sin bordes con barra de título personalizada
 - **Ciclo de vida del motor** (`src/lib/dshEngine.ts`): escanear instancias existentes → elegir puerto libre → lanzar (`node` + `bin.js` local, con respaldos `npx` / `dsh` / `dsh.cmd`) → comprobar salud → detener
-- **Red**: RPC HTTP (`POST /api/<method>`) + flujos de eventos WebSocket mediante `@tauri-apps/plugin-http` (evita el CORS de WebView2 por completo)
+- **Vista del motor** (`src-tauri/src/lib.rs`): una webview hija (`mount_engine_view` / `set_engine_view_bounds` / `unmount_engine_view`) se coloca sobre el área de contenido; el envoltorio mide el elemento anfitrión y mantiene la vista sincronizada con el tamaño de la ventana y el zoom
+- **Autenticación de sesión** (`src/lib/engineAuth.ts`): lee la clave de firma de la sesión del navegador desde `~/.dsh/.credentials.yaml`, genera una cookie verificable por el motor y la inyecta en cada carga de página completada
 - **Diagnóstico**: los intentos y fallos de lanzamiento se registran en `%TEMP%\dsh-spawn.log`
 
 ## 🧰 Pila tecnológica
@@ -97,8 +99,8 @@ npm run tauri build     # genera .app (macOS) / .deb/.AppImage (Linux) en src-ta
 | Cáscara de escritorio | Tauri 2 (Rust), sin bordes + barra personalizada |
 | Frontend | React 19 + TypeScript + Vite 6 |
 | Estilos | Tailwind CSS 4 |
-| Estado | Zustand 5 (stores engine / session / chat / ui) |
-| UI incrustada | WebUI oficial de DeepSeek Harness (iframe) |
+| Estado | Zustand 5 (un único store `engine` — el envoltorio no guarda estado de chat/sesiones) |
+| UI incrustada | WebUI oficial de DeepSeek Harness (Tauri **webview hija**) |
 
 ## 🛠 Desarrollo
 
@@ -120,26 +122,31 @@ Salida: `src-tauri/target/release/bundle/nsis/DSH Desktop_0.1.0_x64-setup.exe`
 
 ```
 src/
-├── App.tsx                 # diseño de la cáscara: TitleBar + iframe(UI oficial) + StatusBar
+├── App.tsx                 # diseño de la cáscara: TitleBar + host de la webview hija + StatusBar
 ├── lib/
 │   ├── dshEngine.ts        # ★ ciclo de vida del motor / cadena de lanzamiento / log
-│   └── api.ts              # RPC HTTP + flujos WS
-├── stores/                 # stores de zustand (engine / ui / session / chat)
+│   ├── engineAuth.ts       # cookie de sesión del motor autofirmada (credenciales gestionadas)
+│   ├── updater.ts          # comprobación de versión del kernel / instalación / rollback
+│   └── types.ts            # tipos compartidos (EngineHealth)
+├── stores/                 # store de zustand (engine)
 └── components/
     ├── TitleBar.tsx        # barra de título personalizada
-    ├── StatusBar.tsx       # estado del motor · puerto · sesiones
-    └── EngineLauncher.tsx  # lanzador: comprobación + instalación + inicio
+    ├── StatusBar.tsx       # estado del motor · versión del kernel / rollback · zoom
+    ├── EngineLauncher.tsx  # lanzador: comprobación + instalación + inicio
+    ├── CloseDialog.tsx     # cerrar / minimizar a bandeja / detener motor y salir
+    └── KeyManagerDialog.tsx# gestión de API keys / credenciales
 src-tauri/
 ├── capabilities/default.json  # ★ permisos (scope de shell spawn, controles de ventana)
 ├── tauri.conf.json            # configuración de ventana / paquete
-└── src/lib.rs                 # registro de plugins
+└── src/lib.rs                 # webview hija (mount/bounds/unmount) + registro de plugins
 ```
 
 ## 🔍 Solución de problemas
 
 - **Los botones o el arrastre de la barra de título no funcionan** — se necesitan permisos `core:window:*` (`allow-minimize` / `allow-toggle-maximize` / `allow-close` / `allow-start-dragging`) en `src-tauri/capabilities/default.json`. Las capabilities se compilan en el binario: recompila tras editarlas.
 - **El motor no arranca** — revisa `%TEMP%\dsh-spawn.log`. Causas comunes: falta `shell:allow-spawn`, falta la lista blanca de programas en el scope, o entradas de scope sin el campo `cmd` (obligatorio para entradas no sidecar).
-- **WebUI en blanco** — la app usa `@tauri-apps/plugin-http` para todas las peticiones porque WebView2 bloquea los fetch entre orígenes (CORS). No lo sustituyas por `fetch` nativo.
+- **WebUI en blanco / «authentication required»** — los motores ≥ 0.1.5 exigen una cookie de sesión y la marcan como `SameSite=Strict`. Un `iframe` dentro de la página del envoltorio (`tauri.localhost`) es un contexto entre sitios, así que la cookie nunca se enviaría: por eso la UI del motor se aloja en una **webview hija**. Si aparece una página 401, comprueba que `~/.dsh/.credentials.yaml` siga conteniendo `client-connection/browser-session`; sin esa clave de firma no se puede generar la cookie.
+- **Vista del motor desalineada tras hacer zoom** — el envoltorio convierte los píxeles CSS a píxeles lógicos con el factor de zoom actual antes de llamar a `set_engine_view_bounds`. Si cambias el diseño, mantén sincronizados los límites del elemento anfitrión y la conversión de zoom.
 
 ## 📄 Licencia
 

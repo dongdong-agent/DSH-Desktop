@@ -1,6 +1,6 @@
 # DeepSeek Harness Desktop
 
-> **DSH Desktop** —— 为 [DeepSeek Harness](https://www.deepseek.com/harness/) 打造的原生桌面客户端，基于 Tauri 2 + React 19。内嵌官方 DeepSeek Harness WebUI，并替你管理本地引擎。
+> **DSH Desktop** —— 为 [DeepSeek Harness](https://www.deepseek.com/harness/) 打造的原生桌面客户端，基于 Tauri 2 + React 19。以子 webview 承载官方 DeepSeek Harness WebUI，并替你管理本地引擎。
 
 <p align="center">
   <img alt="平台: Windows" src="https://img.shields.io/badge/platform-Windows%20x64-0078D6?logo=windows&logoColor=white"/>
@@ -16,12 +16,13 @@
 
 ## ✨ 这是什么？
 
-DeepSeek Harness Desktop 是一个**围绕官方 DeepSeek Harness WebUI 的轻量原生壳**。它不重新发明轮子，而是用 `iframe` 内嵌官方 Web 界面，再补齐桌面应用该有的能力：
+DeepSeek Harness Desktop 是一个**围绕官方 DeepSeek Harness WebUI 的轻量原生壳**。它不重新发明轮子，而是用**子 webview**（站点即 `127.0.0.1` 的顶层文档，而非跨站 `iframe`）承载官方 Web 界面，再补齐桌面应用该有的能力：
 
 - **一键启动引擎** —— 自动检测本机环境（`node` + `dsh`）、挑选空闲端口、以正确 profile 启动引擎。
 - **复用已有实例** —— 本机已有 dsh web 实例在跑时直接连接，绝不双开（不再争抢 `~/.dsh` 会话存储）。
 - **环境自检 + 一键安装** —— 缺 Node.js 或缺 `dsh` 引擎？启动页会明确指出缺什么，并可一键安装。
-- **无边框窗口** —— 自定义标题栏（拖动 / 最小化 / 最大化 / 关闭）+ 状态栏（引擎状态 · 端口 · 会话数）。
+- **无边框窗口** —— 自定义标题栏（拖动 / 最小化 / 最大化 / 关闭）+ 状态栏（引擎状态 · 端口 · 缩放）。
+- **引擎会话鉴权** —— 引擎 ≥ 0.1.5 会拒绝未鉴权请求，且会话 Cookie 为 `SameSite=Strict`。壳用受管凭据里的签名密钥自签该 Cookie 并注入子 webview，因此 WebUI 正常加载，而不是停在 401 页面。
 - **官方更新自动跟进** —— 界面就是官方 WebUI 本体，官方发新版引擎后，桌面端在引擎更新后**自动获得全部新功能、UI 改版、新模型**，无需任何界面重写。
 - **一键检测并升级引擎内核** —— 官方约每 1~2 天发一个新 rc；标题栏「检测并升级内核」按钮实时对比官方 npm registry，有新版时显示红点徽标。升级下载到应用私有内核目录（`%APPDATA%\com.dsh.desktop\kernel\<版本>\`，版本并存、秒级切换），无需命令行、不污染 pnpm/npm 全局；升级后若新版本未验证兼容性，状态栏显示「⚠ 新内核未验证 + 一键回滚」。
 - **本地持久化** —— 会话数据全部落盘在 `~/.dsh/sessions/`，关掉应用不丢任何工作。
@@ -99,17 +100,19 @@ npm run tauri build     # 产出 .app（macOS）/ .deb、.AppImage（Linux）到
 ┌────────────────────────────────────────────────────┐
 │  TitleBar（自定义无边框标题栏 + 引擎状态点）          │
 ├────────────────────────────────────────────────────┤
-│  iframe 全屏 → 官方 DeepSeek Harness WebUI          │
+│  子 webview → 官方 DeepSeek Harness WebUI           │
 │  会话 / 轨迹 / 插件 / 设置，全部官方功能              │
+│  以 127.0.0.1 为站点的顶层文档，Cookie 正常生效       │
 ├────────────────────────────────────────────────────┤
-│  StatusBar（引擎状态 · 端口 · 会话数）               │
+│  StatusBar（引擎状态 · 端口 · 缩放）                 │
 └────────────────────────────────────────────────────┘
 ```
 
 - **前端**：React 19 + TypeScript + Vite 6 + Tailwind CSS 4 + Zustand
 - **桌面壳**：Tauri 2（Rust），无边框窗口 + 自定义标题栏
 - **引擎生命周期**（`src/lib/dshEngine.ts`）：扫描已有实例 → 挑选空闲端口 → spawn（`node` + 本机 `bin.js`，备选 `npx` / `dsh` / `dsh.cmd`）→ 健康检查 → 停止
-- **网络**：HTTP RPC（`POST /api/<method>`）+ WebSocket 事件流，走 `@tauri-apps/plugin-http`（彻底绕开 WebView2 的 CORS）
+- **引擎内容区**（`src-tauri/src/lib.rs`）：子 webview（`mount_engine_view` / `set_engine_view_bounds` / `unmount_engine_view`）铺在内容区上；壳测量宿主元素尺寸，跟随窗口缩放与 Ctrl+滚轮缩放
+- **会话鉴权**（`src/lib/engineAuth.ts`）：从 `~/.dsh/.credentials.yaml` 读取浏览器会话签名密钥，自签一份引擎可校验的 Cookie，每次页面加载完成时注入
 - **诊断**：spawn 过程与失败原因写入 `%TEMP%\dsh-spawn.log`
 
 ## 🧰 技术栈
@@ -119,8 +122,8 @@ npm run tauri build     # 产出 .app（macOS）/ .deb、.AppImage（Linux）到
 | 桌面壳 | Tauri 2（Rust），无边框 + 自定义标题栏 |
 | 前端 | React 19 + TypeScript + Vite 6 |
 | 样式 | Tailwind CSS 4 |
-| 状态 | Zustand 5（engine / session / chat / ui 四个 store） |
-| 内嵌 UI | 官方 DeepSeek Harness WebUI（iframe） |
+| 状态 | Zustand 5（仅 `engine` 一个 store —— 壳不保存任何对话/会话状态） |
+| 内嵌 UI | 官方 DeepSeek Harness WebUI（Tauri **子 webview**） |
 
 ## 🛠 开发
 
@@ -142,27 +145,32 @@ npm run tauri build        # 生产打包（NSIS 安装包 + 绿色版 exe）
 
 ```
 src/
-├── App.tsx                 # 壳布局：TitleBar + iframe(官方UI) + StatusBar
+├── App.tsx                 # 壳布局：TitleBar + 子 webview 宿主 + StatusBar
 ├── lib/
 │   ├── dshEngine.ts        # ★ 引擎生命周期：findExistingInstance / startEngine / stopEngine
 │   │                       #   + candidateCommands（spawn 候选链）+ probePort + 诊断日志
-│   └── api.ts              # HTTP RPC + WS 事件流（plugin-http fetch）
-├── stores/                 # zustand stores（engine / ui / session / chat）
+│   ├── engineAuth.ts       # 引擎会话 Cookie 自签（受管凭据）
+│   ├── updater.ts          # 内核版本检测 / 安装 / 回滚
+│   └── types.ts            # 共享类型（EngineHealth）
+├── stores/                 # zustand store（engine）
 └── components/
     ├── TitleBar.tsx        # 自定义标题栏（拖动 / 最小化 / 最大化 / 关闭）
-    ├── StatusBar.tsx       # 引擎状态 · 端口 · 会话数
-    └── EngineLauncher.tsx  # 启动页：环境检测 + 一键安装 + 启动引擎
+    ├── StatusBar.tsx       # 引擎状态 · 内核版本 / 回滚 · 缩放
+    ├── EngineLauncher.tsx  # 启动页：环境检测 + 一键安装 + 启动引擎
+    ├── CloseDialog.tsx     # 关闭 / 最小化到托盘 / 停止引擎并退出
+    └── KeyManagerDialog.tsx# 受管 API Key / 凭据管理
 src-tauri/
 ├── capabilities/default.json  # ★ 权限（shell spawn scope、窗口控制）
 ├── tauri.conf.json            # 窗口 / 打包配置
-└── src/lib.rs                 # 插件注册（shell / fs / dialog / http）
+└── src/lib.rs                 # 子 webview（mount / bounds / unmount）+ 插件注册
 ```
 
 ## 🔍 疑难排查
 
 - **标题栏按钮或拖动无反应** —— 需在 `src-tauri/capabilities/default.json` 配置 `core:window:*` 权限（`allow-minimize` / `allow-toggle-maximize` / `allow-close` / `allow-start-dragging`）。capabilities 编译进二进制，改后必须重新构建。
 - **引擎 spawn 失败** —— 查看 `%TEMP%\dsh-spawn.log`。常见原因：缺 `shell:allow-spawn`、scope 程序白名单缺失、scope 条目缺 `cmd` 字段（非 sidecar 条目必填）。日志里是精确错误信息。
-- **WebUI 空白** —— 应用所有请求走 `@tauri-apps/plugin-http`（WebView2 会拦截跨源 fetch，即 CORS）。不要把它换成原生 fetch。
+- **WebUI 空白 / 提示 authentication required** —— 引擎 ≥ 0.1.5 要求会话 Cookie，且该 Cookie 为 `SameSite=Strict`。壳页面（`tauri.localhost`）里的 `iframe` 属跨站上下文，Cookie 永远不会被发送——这正是引擎 UI 改用**子 webview** 承载的原因。若出现 401 页面，请检查 `~/.dsh/.credentials.yaml` 中是否仍有 `client-connection/browser-session`；没有签名密钥就无法生成 Cookie。
+- **缩放后引擎视图错位** —— 壳在调用 `set_engine_view_bounds` 前，会按当前缩放比例把 CSS 像素换算成逻辑像素。改动布局时，请保持宿主元素尺寸与缩放换算同步。
 
 ## 📄 开源协议
 

@@ -16,12 +16,13 @@
 
 ## ✨ Was ist das?
 
-DeepSeek Harness Desktop ist eine **schlanke native Hülle** um die offizielle DeepSeek Harness WebUI. Statt die Benutzeroberfläche neu zu erfinden, bettet sie die offizielle Weboberfläche in einem `iframe` ein und ergänzt, was eine Desktop-App ausmacht:
+DeepSeek Harness Desktop ist eine **schlanke native Hülle** um die offizielle DeepSeek Harness WebUI. Statt die Benutzeroberfläche neu zu erfinden, hostet sie die offizielle Weboberfläche in einem **Kind-Webview** — einem echten Top-Level-Dokument, dessen Origin *127.0.0.1* ist, nicht einem Cross-Site-`iframe` — und ergänzt, was eine Desktop-App ausmacht:
 
 - **Engine-Start mit einem Klick** — erkennt Ihre lokale Umgebung (`node` + `dsh`), wählt einen freien Port und startet die Engine mit dem richtigen Profil.
 - **Vorhandene Instanzen wiederverwenden** — läuft bereits eine DeepSeek-Harness-Webinstanz auf Ihrem Rechner, verbindet sich die App direkt, statt eine zweite zu starten (kein Streit mehr um den `~/.dsh`-Sitzungsspeicher).
 - **Umgebungscheck + Installation mit einem Klick** — fehlen Node.js oder die `dsh`-Engine? Der Launcher sagt Ihnen genau, was fehlt, und kann es für Sie installieren.
-- **Rahmenloses Fenster** — benutzerdefinierte Titelleiste (ziehen / minimieren / maximieren / schließen) und eine Statusleiste mit Engine-Zustand, Port und Sitzungsanzahl.
+- **Rahmenloses Fenster** — benutzerdefinierte Titelleiste (ziehen / minimieren / maximieren / schließen) und eine Statusleiste mit Engine-Zustand, Port und Zoomstufe.
+- **Authentifizierte Engine-Sitzungen** — Engines ≥ 0.1.5 lehnen unauthentifizierte Anfragen ab und setzen ein `SameSite=Strict`-Sitzungscookie. Die Hülle signiert dieses Cookie selbst mit dem Schlüssel aus dem verwalteten Credential-Store und injiziert es in das Kind-Webview, sodass die WebUI lädt statt eine 401-Seite zu zeigen.
 - **Lokale Persistenz** — alle Sitzungen liegen auf der Festplatte unter `~/.dsh/sessions/`; das Schließen der App verliert also nie Ihre Arbeit.
 
 Alles andere — Sitzungen, Trajektorien, Plugins, Agent-Voreinstellungen — ist die **offizielle DeepSeek Harness WebUI** in voller Fidelity, denn die App hostet sie lediglich.
@@ -76,18 +77,19 @@ npm run tauri build     # erzeugt .app (macOS) / .deb/.AppImage (Linux) in src-t
 ┌────────────────────────────────────────────────────┐
 │  TitleBar (rahmenlos + Engine-Statuspunkt)         │
 ├────────────────────────────────────────────────────┤
-│  iframe (Vollbild) → offizielle DeepSeek Harness   │
-│  WebUI — Sitzungen / Trajektorien / Plugins /      │
-│  Einstellungen                                     │
+│  Kind-Webview → offizielle DeepSeek Harness WebUI  │
+│  Sitzungen / Trajektorien / Plugins / Einstellungen│
+│  als Top-Level-Dokument unter 127.0.0.1 gerendert  │
 ├────────────────────────────────────────────────────┤
-│  StatusBar (Engine-Zustand · Port · Sitzungen)     │
+│  StatusBar (Engine-Zustand · Port · Zoom)          │
 └────────────────────────────────────────────────────┘
 ```
 
 - **Frontend**: React 19 + TypeScript + Vite 6 + Tailwind CSS 4 + Zustand
 - **Desktop-Hülle**: Tauri 2 (Rust), rahmenloses Fenster mit benutzerdefinierter Titelleiste
 - **Engine-Lebenszyklus** (`src/lib/dshEngine.ts`): vorhandene Instanzen suchen → freien Port wählen → starten (`node` + lokales `bin.js`, Fallbacks `npx` / `dsh` / `dsh.cmd`) → Healthcheck → stoppen
-- **Netzwerk**: HTTP-RPC (`POST /api/<method>`) + WebSocket-Ereignisströme über `@tauri-apps/plugin-http` (umgeht WebView2-CORS vollständig)
+- **Engine-Ansicht** (`src-tauri/src/lib.rs`): Ein Kind-Webview (`mount_engine_view` / `set_engine_view_bounds` / `unmount_engine_view`) wird über dem Inhaltsbereich positioniert; die Hülle misst das Host-Element und hält die Ansicht bei Fenstergrößen- und Zoomänderungen synchron
+- **Sitzungs-Authentifizierung** (`src/lib/engineAuth.ts`): liest den Signaturschlüssel der Browser-Sitzung aus `~/.dsh/.credentials.yaml`, erzeugt ein von der Engine prüfbares Cookie und injiziert es bei jedem abgeschlossenen Seitenaufbau
 - **Diagnose**: Startversuche und Fehler werden in `%TEMP%\dsh-spawn.log` protokolliert
 
 ## 🧰 Tech-Stack
@@ -97,8 +99,8 @@ npm run tauri build     # erzeugt .app (macOS) / .deb/.AppImage (Linux) in src-t
 | Desktop-Hülle | Tauri 2 (Rust), rahmenlos + benutzerdefinierte Titelleiste |
 | Frontend | React 19 + TypeScript + Vite 6 |
 | Styling | Tailwind CSS 4 |
-| State | Zustand 5 (engine / session / chat / ui Stores) |
-| Eingebettete UI | Offizielle DeepSeek Harness WebUI (iframe) |
+| State | Zustand 5 (nur ein `engine`-Store — die Hülle hält keinen Chat-/Sitzungszustand) |
+| Eingebettete UI | Offizielle DeepSeek Harness WebUI (Tauri-**Kind-Webview**) |
 
 ## 🛠 Entwicklung
 
@@ -120,26 +122,31 @@ Ausgabe: `src-tauri/target/release/bundle/nsis/DSH Desktop_0.1.0_x64-setup.exe`
 
 ```
 src/
-├── App.tsx                 # Hüllen-Layout: TitleBar + iframe(offizielle UI) + StatusBar
+├── App.tsx                 # Hüllen-Layout: TitleBar + Kind-Webview-Host + StatusBar
 ├── lib/
 │   ├── dshEngine.ts        # ★ Engine-Lebenszyklus / Start-Fallback-Kette / Log
-│   └── api.ts              # HTTP-RPC + WS-Ereignisströme
-├── stores/                 # Zustand-Stores (engine / ui / session / chat)
+│   ├── engineAuth.ts       # selbst signiertes Engine-Sitzungscookie (verwaltete Credentials)
+│   ├── updater.ts          # Kernel-Versionsprüfung / Installation / Rollback
+│   └── types.ts            # gemeinsame Typen (EngineHealth)
+├── stores/                 # Zustand-Store (engine)
 └── components/
     ├── TitleBar.tsx        # benutzerdefinierte Titelleiste
-    ├── StatusBar.tsx       # Engine-Zustand · Port · Sitzungen
-    └── EngineLauncher.tsx  # Launcher: Check + Installation + Start
+    ├── StatusBar.tsx       # Engine-Zustand · Kernel-Version / Rollback · Zoom
+    ├── EngineLauncher.tsx  # Launcher: Check + Installation + Start
+    ├── CloseDialog.tsx     # Schließen / ins Tray minimieren / Engine stoppen und beenden
+    └── KeyManagerDialog.tsx# Verwaltung von API-Keys / Credentials
 src-tauri/
 ├── capabilities/default.json  # ★ Berechtigungen (shell-spawn-Scope, Fenstersteuerung)
 ├── tauri.conf.json            # Fenster-/Bundle-Konfiguration
-└── src/lib.rs                 # Plugin-Registrierung
+└── src/lib.rs                 # Kind-Webview (mount/bounds/unmount) + Plugin-Registrierung
 ```
 
 ## 🔍 Fehlerbehebung
 
 - **Titelleisten-Buttons oder Ziehen funktionieren nicht** — die Berechtigungen `core:window:*` (`allow-minimize` / `allow-toggle-maximize` / `allow-close` / `allow-start-dragging`) müssen in `src-tauri/capabilities/default.json` stehen. Capabilities werden ins Binary kompiliert: nach Änderung neu bauen.
 - **Engine startet nicht** — `%TEMP%\dsh-spawn.log` prüfen. Häufige Ursachen: fehlendes `shell:allow-spawn`, fehlende Programm-Whitelist im Scope, oder Scope-Einträge ohne das Feld `cmd` (für Nicht-Sidecar-Einträge Pflicht).
-- **WebUI bleibt weiß** — die App nutzt für alle Anfragen `@tauri-apps/plugin-http`, weil WebView2 Cross-Origin-Fetch (CORS) blockiert. Nicht durch natives `fetch` ersetzen.
+- **WebUI bleibt weiß / „authentication required"** — Engines ≥ 0.1.5 verlangen ein Sitzungscookie und setzen es auf `SameSite=Strict`. Ein `iframe` innerhalb der Hüllen-Seite (`tauri.localhost`) ist ein Cross-Site-Kontext, in dem das Cookie nie gesendet würde — genau deshalb wird die Engine-UI in einem **Kind-Webview** gehostet. Erscheint eine 401-Seite, prüfen Sie, ob `~/.dsh/.credentials.yaml` noch `client-connection/browser-session` enthält; ohne diesen Signaturschlüssel lässt sich kein Cookie erzeugen.
+- **Engine-Ansicht nach Zoom verschoben** — die Hülle rechnet CSS-Pixel vor dem Aufruf von `set_engine_view_bounds` über den aktuellen Zoomfaktor in logische Pixel um. Bei Layoutänderungen Bounds des Host-Elements und Zoom-Umrechnung synchron halten.
 
 ## 📄 Lizenz
 
