@@ -19,7 +19,7 @@
         "minWidth": 940,
         "minHeight": 620,
         "maximized": true,
-        "decorations": false,
+        "decorations": true,
         "devtools": true,
         "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,TrackingPrevention",
         "dataDirectory": "webview2-default",

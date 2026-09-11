@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import { writeTextFile } from "@tauri-apps/plugin-fs";
-import { listen } from "@tauri-apps/api/event";
 import { register as regShortcut, isRegistered as isReg, unregister as unreg } from "@tauri-apps/plugin-global-shortcut";
 import { useEngineStore } from "./stores/engineStore";
 import { TitleBar } from "./components/TitleBar";
@@ -15,17 +14,15 @@ import { buildEngineAuth, readBrowserSessionSecret } from "./lib/engineAuth";
 import { useZoomShortcuts } from "./hooks/useZoomShortcuts";
 
 /**
- * DSH Desktop：Tauri 壳 + 内嵌官方 WebUI
- * - 壳：自定义标题栏（窗口控制）/ 底部状态栏 / 引擎管理
- * - 内容区：**子 webview**（非 iframe）承载官方 dsh web，见下方挂载 effect
+ * DSH Desktop：Tauri 壳 + 官方 WebUI
+ * - 壳：窗口控制 / 底部状态栏 / 引擎管理（引擎启动前展示）
+ * - 引擎就绪后：主窗口整体导航到官方 dsh web（顶层文档，见下方 effect）
  * 官方 UI 自带完整侧栏（会话/设置/插件），无需自研侧栏。
  */
 export default function App() {
   const health = useEngineStore((s) => s.health);
   const setHealth = useEngineStore((s) => s.setHealth);
   const launchRequested = useEngineStore((s) => s.launchRequested);
-  /** 引擎内容区宿主：子 webview 会铺在这个 div 的位置/尺寸上 */
-  const engineHostRef = useRef<HTMLDivElement | null>(null);
   const { zoom, setZoom } = useZoomShortcuts();
   const [closeDialogOpen, setCloseDialogOpen] = useState(false);
   const [keyManagerOpen, setKeyManagerOpen] = useState(false);
@@ -127,27 +124,11 @@ export default function App() {
     };
   }, [appWindow]);
 
-  // 托盘菜单“退出并停止引擎”：停引擎后强制销毁窗口（destroy 不再触发 onCloseRequested）
-  useEffect(() => {
-    const unlisten = listen("tray-quit", () => {
-      void (async () => {
-        try {
-          await stopEngine();
-        } finally {
-          await appWindow.destroy().catch(() => {});
-        }
-      })();
-    });
-    return () => {
-      unlisten.then((f) => f());
-    };
-  }, [appWindow]);
-
   // 订阅引擎健康状态
   useEffect(() => {
     return onEngineHealth((h) => {
       setHealth(h);
-      // 引擎地址变化 → 下方挂载 effect 依赖 engineUrl，会自动重新挂载子 webview
+      // 引擎地址变化 → 下方导航 effect 依赖 engineUrl，会自动重新打开引擎界面
     });
   }, [setHealth]);
 
@@ -188,77 +169,52 @@ export default function App() {
     peekTimerRef.current = window.setTimeout(() => setPeek(false), 600);
   };
 
-  // ── 引擎内容区：由子 webview 承载（不是 iframe）──
-  // 引擎 ≥0.1.5 对未鉴权请求回 401，且会话 Cookie 是 SameSite=Strict：壳页面
-  // （tauri.localhost）里的 iframe 加载 127.0.0.1 属跨站上下文，Cookie 永远发不出去；
-  // 子 webview 是独立顶层文档，站点即 127.0.0.1，Cookie 正常生效。鉴权 Cookie 由 GUI
-  // 用受管凭据里的签名密钥自签（见 src/lib/engineAuth.ts）。
+  // ── 引擎就绪后：主窗口整体导航到引擎页面（顶层文档）──
+  // 历史结论（勿回退）：
+  // - iframe：跨站上下文拿不到引擎的 SameSite=Strict 会话 Cookie，永远 401；
+  // - 同窗口子 webview（Tauri unstable 多 webview）：WebView2 多 controller 在本机
+  //   渲染黑屏，resize/置顶均无法恢复。
+  // 顶层导航 + 自签 Cookie 注入（src/lib/engineAuth.ts）是最稳的组合。
+  // 注意：导航会替换掉壳的 JS 上下文（标题栏/状态栏不再渲染，属预期行为），
+  // 所以导航前必须注销全部全局快捷键，否则会永久残留抢占系统快捷键。
   useEffect(() => {
-    if (!running) {
-      void invoke("unmount_engine_view").catch(() => {});
-      return;
-    }
-    let disposed = false;
-
-    const measure = () => {
-      const el = engineHostRef.current;
-      if (!el) return null;
-      const r = el.getBoundingClientRect();
-      if (r.width < 1 || r.height < 1) return null;
-      // 壳页面被 Ctrl+滚轮缩放时 CSS 像素 ≠ 逻辑像素，换算回逻辑坐标
-      return {
-        x: r.left * zoom,
-        y: r.top * zoom,
-        width: r.width * zoom,
-        height: r.height * zoom,
-      };
-    };
-    const syncBounds = () => {
-      const box = measure();
-      if (!box) return;
-      void invoke("set_engine_view_bounds", box).catch(() => {});
-    };
-
+    if (!running) return;
+    let cancelled = false;
     void (async () => {
-      const box = measure();
-      if (!box) return;
       const secret = await readBrowserSessionSecret();
       const auth = secret ? await buildEngineAuth(health.port, secret) : null;
-      if (disposed) return;
+      if (cancelled) return;
+      for (const k of [
+        "F12",
+        "CommandOrControl+Shift+H",
+        "CommandOrControl+Shift+Equal",
+        "CommandOrControl+Equal",
+        "CommandOrControl+NumpadAdd",
+        "CommandOrControl+Minus",
+        "CommandOrControl+NumpadSubtract",
+        "CommandOrControl+Digit0",
+      ]) {
+        if (await isReg(k).catch(() => false)) await unreg(k).catch(() => {});
+      }
       try {
-        await invoke("mount_engine_view", { url: engineUrl, authJs: auth?.js ?? "", ...box });
+        await invoke("open_engine_in_main", { url: engineUrl, authJs: auth?.js ?? "" });
       } catch (e) {
-        console.error("[engine-view] mount failed:", e);
-        // 挂载失败在黑屏时看不到 console，落盘便于排查
+        console.error("[engine-view] open failed:", e);
+        // 打开失败在黑屏时看不到 console，落盘便于排查
         try {
           await writeTextFile(
             "C:\\Windows\\Temp\\dsh-engine-view.log",
-            `${new Date().toISOString()} mount failed box=${JSON.stringify(box)} err=${String(e)}\n`,
+            `${new Date().toISOString()} open failed err=${String(e)}\n`,
           );
         } catch {
           /* ignore */
         }
-        return;
-      }
-      if (disposed) {
-        // 迟到的挂载：仅当引擎已不在运行时才回收。StrictMode 会让 effect 连跑两次，
-        // 这里若无条件 unmount，就会把第二次挂载好的视图误杀（黑屏根因之一）。
-        if (useEngineStore.getState().health.status !== "running") {
-          void invoke("unmount_engine_view").catch(() => {});
-        }
       }
     })();
-
-    const ro = new ResizeObserver(() => syncBounds());
-    const host = engineHostRef.current;
-    if (host) ro.observe(host);
-    window.addEventListener("resize", syncBounds);
     return () => {
-      disposed = true;
-      ro.disconnect();
-      window.removeEventListener("resize", syncBounds);
+      cancelled = true;
     };
-  }, [running, engineUrl, health.port, zoom]);
+  }, [running, engineUrl, health.port]);
 
   return (
     <div className="relative flex h-screen w-screen flex-col overflow-hidden bg-[rgb(10_10_12)] text-gray-100 select-none">
@@ -296,11 +252,10 @@ export default function App() {
       ) : (
         <main className="min-h-0 w-full flex-1" onWheel={onWheel}>
           {running ? (
-            <div
-              ref={engineHostRef}
-              className="h-full w-full bg-[rgb(10_10_12)]"
-              aria-label="DeepSeek Harness WebUI"
-            />
+            <div className="flex h-full flex-col items-center justify-center gap-2 text-sm text-gray-400">
+              <span>正在打开引擎界面…</span>
+              <span className="text-[11px] text-gray-600">窗口即将切换到 DeepSeek Harness WebUI</span>
+            </div>
           ) : (
             <div className="flex h-full items-center justify-center text-sm text-gray-500">
               引擎启动中…

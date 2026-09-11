@@ -13,10 +13,9 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-# unstable：同窗口多 webview（Window::add_child）——引擎页面的正确承载方式。
-# 引擎 ≥0.1.5 的 web 端鉴权 Cookie 是 SameSite=Strict，跨站 iframe 永远拿不到，
-# 必须用「顶层文档」形态的 webview 承载，见 lib.rs 的 mount_engine_view。
-tauri = { version = "2", features = ["protocol-asset", "tray-icon", "devtools", "unstable"] }
+# 注意：不要启用 unstable（同窗口多 webview）——WebView2 多 controller 渲染
+# 不稳定（实测内容区整体黑屏）。引擎页面改由主窗口顶层导航承载，见 lib.rs。
+tauri = { version = "2", features = ["protocol-asset", "tray-icon", "devtools"] }
 tauri-plugin-single-instance = "2"
 tauri-plugin-shell = "2"
 tauri-plugin-fs = "2"
