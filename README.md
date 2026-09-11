@@ -8,7 +8,7 @@
 
 <p align="center">
   <img alt="Platform: Windows" src="https://img.shields.io/badge/platform-Windows%20x64-0078D6?logo=windows&logoColor=white"/>
-  <img alt="Version" src="https://img.shields.io/badge/version-0.1.12-purple"/>
+  <img alt="Version" src="https://img.shields.io/badge/version-0.1.13-purple"/>
   <img alt="Built with Tauri" src="https://img.shields.io/badge/Tauri-2.0-24C8D8?logo=tauri&logoColor=white"/>
   <img alt="React 19" src="https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=white"/>
   <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-green"/>
@@ -141,7 +141,7 @@ npm run build              # tsc + vite build
 npm run tauri build        # production bundle (NSIS installer + portable exe)
 ```
 
-Output: `src-tauri/target/release/bundle/nsis/DSH Desktop_0.1.12_x64-setup.exe`
+Output: `src-tauri/target/release/bundle/nsis/DSH Desktop_0.1.13_x64-setup.exe`
 
 ## 📁 Project layout
 

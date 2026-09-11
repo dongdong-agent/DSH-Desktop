@@ -4,7 +4,7 @@
 
 <p align="center">
   <img alt="平台: Windows" src="https://img.shields.io/badge/platform-Windows%20x64-0078D6?logo=windows&logoColor=white"/>
-  <img alt="版本" src="https://img.shields.io/badge/version-0.1.12-purple"/>
+  <img alt="版本" src="https://img.shields.io/badge/version-0.1.13-purple"/>
   <img alt="Tauri" src="https://img.shields.io/badge/Tauri-2.0-24C8D8?logo=tauri&logoColor=white"/>
   <img alt="React 19" src="https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=white"/>
   <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-green"/>
@@ -31,7 +31,7 @@ DeepSeek Harness Desktop 是一个**围绕官方 DeepSeek Harness WebUI 的轻�
 
 ## 🚀 快速开始
 
-1. 从 [Releases](https://github.com/dongdong-agent/DSH-Desktop/releases) 下载最新安装包（`DSH Desktop_0.1.12_x64-setup.exe`，Windows x64），或直接复制绿色版 `dsh-desktop.exe` 到任意位置。
+1. 从 [Releases](https://github.com/dongdong-agent/DSH-Desktop/releases) 下载最新安装包（`DSH Desktop_0.1.13_x64-setup.exe`，Windows x64），或直接复制绿色版 `dsh-desktop.exe` 到任意位置。
 2. **启动应用**。启动页会显示环境检测结果（Node.js / npx / dsh 引擎）。
 3. 点击 **启动引擎**。应用会自动 spawn 引擎（`dsh --profile web`，监听 `127.0.0.1:17800` 或其他空闲端口）并自动加载官方 WebUI。
 4. 像网页版一样使用——会话、插件、轨迹，应有尽有。
@@ -139,7 +139,7 @@ npm run build              # tsc + vite build
 npm run tauri build        # 生产打包（NSIS 安装包 + 绿色版 exe）
 ```
 
-产物：`src-tauri/target/release/bundle/nsis/DSH Desktop_0.1.12_x64-setup.exe`
+产物：`src-tauri/target/release/bundle/nsis/DSH Desktop_0.1.13_x64-setup.exe`
 
 ## 📁 项目结构
 
