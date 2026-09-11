@@ -152,15 +152,18 @@ async function findDshBinJs(targetVersion?: string | null): Promise<string | nul
             diag("精确版本 bin.js 不存在:", bin);
           }
         } else {
-          const best = dirs.map((d) => d.name).sort((a, b) => compareVersions(b, a))[0];
-          if (best) {
-            const bin = `${root}\\${best}\\node_modules\\@deepseek-ai\\dsh\\lib\\bin.js`;
-            diag("最优版本:", best, "bin:", bin);
+          // 版本目录按高→低排序，取第一个真正含 bin.js 的目录。
+          // 必须有这一层校验：内核升级被中断时会留下「只有空目录、没有 bin.js」的半成品，
+          // 旧实现取最高版本后一旦 bin.js 缺失就直接放弃，白名单里可用的版本反而用不上。
+          const sorted = dirs.map((d) => d.name).sort((a, b) => compareVersions(b, a));
+          for (const ver of sorted) {
+            const bin = `${root}\\${ver}\\node_modules\\@deepseek-ai\\dsh\\lib\\bin.js`;
             if (await exists(bin).catch(() => false)) {
+              diag("选中内核版本:", ver, "bin:", bin);
               dshBinJsCache = bin;
               return bin;
             }
-            diag("最优版本 bin.js 不存在（exists=false）:", bin);
+            diag("内核目录缺少 bin.js，跳过:", ver, bin);
           }
         }
       } else {
@@ -379,6 +382,13 @@ export async function probePort(port: number, timeoutMs = 1500): Promise<boolean
       cache: "no-store",
     });
     clearTimeout(timer);
+    // 引擎 ≥0.1.5 起 web 端启用浏览器会话鉴权：不带会话 Cookie 的请求一律 401
+    // （正文为 "dsh web authentication required"）。401 同样证明该端口上 dsh web
+    // 已经监听，不能判成「没有实例」——否则探测恒失败，启动流程会空转超时。
+    if (res.status === 401) {
+      diag("probePort 401（引擎已监听但需会话鉴权）:", port);
+      return true;
+    }
     if (!res.ok) return false;
     const text = await res.text().catch(() => "");
     return text.includes("__DSH_BOOT__");
