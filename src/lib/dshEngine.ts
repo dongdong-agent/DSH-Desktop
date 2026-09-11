@@ -339,10 +339,10 @@ export async function installNode(): Promise<{ ok: boolean; output: string }> {
   }
 }
 
-/** 一键安装 dsh（npm 全局） */
+/** 一键安装 dsh（npm 全局）。Windows 上 npm 是 .cmd 批处理，spawn 必须带扩展名 */
 export async function installDsh(): Promise<{ ok: boolean; output: string }> {
   try {
-    const c = Command.create("npm", ["install", "-g", "@deepseek-ai/dsh"]);
+    const c = Command.create("npm.cmd", ["install", "-g", "@deepseek-ai/dsh"]);
     const out = await c.execute();
     return { ok: out.code === 0, output: (out.stdout || out.stderr || "").slice(-300) };
   } catch (e) {

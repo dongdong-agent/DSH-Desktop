@@ -295,16 +295,17 @@ export function isKernelInstalling(): boolean {
  *   100% CPU 死循环且永不写 node_modules，pnpm 10 同包 58s 完成；
  * - npm 兜底（其他机器 npm 可能正常）。
  */
-async function detectPackageManager(): Promise<"pnpm" | "npm"> {
+async function detectPackageManager(): Promise<"pnpm.cmd" | "npm.cmd"> {
   try {
     const home = await homeDir().catch(() => "");
     // pnpm 的 npm 全局 shim 位置（pnpm.cmd 比 pnpm 更稳：不依赖 bash shim）
     const pnpmCmd = home ? `${home}AppData\\Roaming\\npm\\pnpm.cmd` : "";
-    if (pnpmCmd && (await exists(pnpmCmd).catch(() => false))) return "pnpm";
+    if (pnpmCmd && (await exists(pnpmCmd).catch(() => false))) return "pnpm.cmd";
   } catch {
-    /* 探测失败走 npm */
+    /* 探测失败走 npm.cmd */
   }
-  return "npm";
+  // Windows 上 npm/pnpm 是 .cmd 批处理：spawn 必须带扩展名，"npm" 会 program not found
+  return "npm.cmd";
 }
 
 /**
@@ -328,14 +329,14 @@ export async function installKernel(version: string): Promise<{ ok: boolean; err
     }
     const pm = await detectPackageManager();
     const install =
-      pm === "pnpm"
+      pm === "pnpm.cmd"
         ? await runCommand(
-            "pnpm",
+            "pnpm.cmd",
             ["add", "--dir", target, `${DSH_PKG}@${version}`],
             INSTALL_TIMEOUT_MS,
           )
         : await runCommand(
-            "npm",
+            "npm.cmd",
             ["install", "--prefix", target, `${DSH_PKG}@${version}`, "--no-audit", "--no-fund", "--loglevel=error"],
             INSTALL_TIMEOUT_MS,
           );

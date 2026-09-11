@@ -279,7 +279,7 @@ describe("installKernel", () => {
 
   it("npm 安装成功 + 冒烟输出一致 → ok", async () => {
     stubShell([
-      { prog: "npm", code: 0, stdout: "", stderr: "" },
+      { prog: "npm.cmd", code: 0, stdout: "", stderr: "" },
       { prog: "node", code: 0, stdout: "0.1.1-rc.2\n", stderr: "" },
     ]);
     const res = await installKernel("0.1.1-rc.2");
@@ -290,7 +290,7 @@ describe("installKernel", () => {
       { recursive: true },
     );
     // npm 必须带 --prefix 指向内核目录（GUI 托管，不污染全局）
-    const npmArgs = shellMocks.create.mock.calls.find(([p]: string[]) => p === "npm")?.[1] as string[];
+    const npmArgs = shellMocks.create.mock.calls.find(([p]: string[]) => p === "npm.cmd")?.[1] as string[];
     expect(npmArgs).toContain("--prefix");
     expect(npmArgs.join(" ")).toContain("com.dsh.desktop\\kernel\\0.1.1-rc.2");
     // 冒烟用 node + bin.js 绝对路径
@@ -305,32 +305,32 @@ describe("installKernel", () => {
       return Promise.resolve(false);
     });
     stubShell([
-      { prog: "pnpm", code: 0, stdout: "", stderr: "" },
+      { prog: "pnpm.cmd", code: 0, stdout: "", stderr: "" },
       { prog: "node", code: 0, stdout: "0.1.1-rc.2\n", stderr: "" },
     ]);
     const res = await installKernel("0.1.1-rc.2");
     expect(res.ok).toBe(true);
     // pnpm 用 add --dir 指向内核目录
-    const pnpmArgs = shellMocks.create.mock.calls.find(([p]: string[]) => p === "pnpm")?.[1] as string[];
+    const pnpmArgs = shellMocks.create.mock.calls.find(([p]: string[]) => p === "pnpm.cmd")?.[1] as string[];
     expect(pnpmArgs).toContain("add");
     expect(pnpmArgs).toContain("--dir");
     expect(pnpmArgs.join(" ")).toContain("kernel\\0.1.1-rc.2");
     // npm 不被调用
-    expect(shellMocks.create.mock.calls.some(([p]: string[]) => p === "npm")).toBe(false);
+    expect(shellMocks.create.mock.calls.some(([p]: string[]) => p.startsWith("npm"))).toBe(false);
   });
 
   it("无 pnpm 时回退 npm install --prefix", async () => {
-    // exists 默认全 false（pnpm.cmd 不存在）→ npm 分支
+    // exists 默认全 false（pnpm.cmd 不存在）→ npm.cmd 分支
     stubShell([
-      { prog: "npm", code: 0, stdout: "", stderr: "" },
+      { prog: "npm.cmd", code: 0, stdout: "", stderr: "" },
       { prog: "node", code: 0, stdout: "0.1.1-rc.2\n", stderr: "" },
     ]);
     const res = await installKernel("0.1.1-rc.2");
     expect(res.ok).toBe(true);
-    const npmArgs = shellMocks.create.mock.calls.find(([p]: string[]) => p === "npm")?.[1] as string[];
+    const npmArgs = shellMocks.create.mock.calls.find(([p]: string[]) => p === "npm.cmd")?.[1] as string[];
     expect(npmArgs).toContain("install");
     expect(npmArgs).toContain("--prefix");
-    expect(shellMocks.create.mock.calls.some(([p]: string[]) => p === "pnpm")).toBe(false);
+    expect(shellMocks.create.mock.calls.some(([p]: string[]) => p.startsWith("pnpm"))).toBe(false);
   });
 
   it("创建内核目录失败（mkdir 抛错）→ 返回具体错误，不执行 npm", async () => {
@@ -344,7 +344,7 @@ describe("installKernel", () => {
 
   it("冒烟输出 0.1.1-rc.20 时安装 0.1.1-rc.2 判失败（字符串 includes 误报防护）", async () => {
     stubShell([
-      { prog: "npm", code: 0, stdout: "", stderr: "" },
+      { prog: "npm.cmd", code: 0, stdout: "", stderr: "" },
       { prog: "node", code: 0, stdout: "0.1.1-rc.20\n", stderr: "" },
     ]);
     const res = await installKernel("0.1.1-rc.2");
@@ -362,7 +362,7 @@ describe("installKernel", () => {
   });
 
   it("npm 安装失败返回具体错误信息", async () => {
-    stubShell([{ prog: "npm", code: 1, stderr: "npm error EACCES: permission denied" }]);
+    stubShell([{ prog: "npm.cmd", code: 1, stderr: "npm error EACCES: permission denied" }]);
     const res = await installKernel("0.1.1-rc.2");
     expect(res.ok).toBe(false);
     expect(res.error).toMatch(/EACCES/);
