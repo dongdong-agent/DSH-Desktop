@@ -1,0 +1,12 @@
+{
+  "name": "dsh-balance",
+  "description": "对话输入框下方显示 DeepSeek 官方账户余额",
+  "version": "1.0.0",
+  "entry": {
+    "name": "dsh-balance",
+    "inject": ["webServer"]
+  },
+  "client": {
+    "platform": "web"
+  }
+}
