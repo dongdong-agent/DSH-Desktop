@@ -153,6 +153,17 @@ export default function App() {
     })();
   }, [setHealth]);
 
+  // 向 Rust 侧登记当前引擎端口：托盘「完全退出」由 Rust 按端口强杀引擎进程。
+  // 必要性：引擎由前端 spawn，就绪后主窗口顶层导航到引擎页 → 壳的 JS 上下文被替换，
+  // 托盘菜单事件再也回不到前端；且复用的外部实例（用户自己的 dsh web）不在
+  // shell 插件的子进程表里，退出 GUI 不会带走它。端口登记到 Rust 后，
+  // 「完全退出」在导航后依然能杀掉引擎（含复用实例）。
+  useEffect(() => {
+    void invoke("set_engine_port", {
+      port: health.status === "running" ? health.port : null,
+    }).catch(() => {});
+  }, [health.status, health.port]);
+
   const running = health.status === "running";
   const engineUrl = health.url || `http://127.0.0.1:${health.port}`;
   // 沉浸模式下两条栏收起；鼠标贴到窗口边缘（peek）时临时展开

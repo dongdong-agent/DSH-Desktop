@@ -16,6 +16,7 @@ import { exists, readDir, readTextFile, writeTextFile } from "@tauri-apps/plugin
 import { appDataDir, homeDir } from "@tauri-apps/api/path";
 import { compareVersions, kernelRootDir, normalizeDshVersion, runCommand } from "./updater";
 import { readCredentials } from "./credentials";
+import { ensureEnginePatchFile } from "./enginePatch";
 import type { EngineHealth } from "./types";
 
 /** 诊断日志（落盘系统临时目录 dsh-spawn.log；WebView console 不输出到终端，靠文件看错误） */
@@ -44,7 +45,25 @@ async function httpFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
 const DEFAULT_PORT = 17800;
 /** 用户可能已在跑的 dsh web 常见端口（网页版实际端口以进程为准） */
 const KNOWN_DHS_PORTS = [3080, 8080, 8081, 3000, 5173, 17800, 18080];
-const MAX_START_WAIT_MS = 30_000;
+/**
+ * 单个候选命令的最长等待时间。
+ *
+ * 为什么从 30s 拉长（2026-09-14 实测坐实的根因）：引擎**首次启动**要执行
+ * `healProfilesModuleFallback`（修复 profiles 的 node_modules，本质是长任务；对照 updater.ts
+ * 里同类 npm 操作给了 20 分钟）。旧值 30s 会在 heal 中途把引擎 kill 掉，而引擎此时**可能正持有**
+ * `~/.dsh/profiles/node_modules.lock` —— 被杀后锁不释放，残留锁让之后**每一次**启动都抛
+ * `atomic-write: timed out waiting for the writer lock`，界面表现为「所有候选命令均无法启动」，
+ * 且用户按提示重装引擎完全无效（重装不解决锁）。
+ *
+ * 拉长不会让"真失败"变慢：候选进程**退出**会被立即感知（见 startEngine 里的 close/error 监听），
+ * 只有"进程还活着"才继续等——活着就说明它还在干活，不该打断它。
+ *
+ * 再放宽（180s → **600s**）：2026-09-14 现场实测，冷缓存下首次 heal 的依赖安装**跑满 180s 仍未完成**
+ * （`~/.dsh/profiles/node_modules` 正在逐个落包，最后写入时刻恰是超时那一刻）；把安装打断除了留锁，
+ * 还会让下一次启动**从零重来**，形成"永远装不完"的循环。装完一次之后（包已缓存）实测 **15~60s** 即可就绪，
+ * 所以这个上限只影响"真正的第一次"。
+ */
+const MAX_START_WAIT_MS = 600_000;
 
 /** npm 自带 npx-cli.js（新用户零安装兜底：npx --yes @deepseek-ai/dsh 自动下载） */
 const NPX_CLI_JS = "C:\\Program Files\\nodejs\\node_modules\\npm\\bin\\npx-cli.js";
@@ -237,6 +256,87 @@ export async function managedCredentialEnv(): Promise<Record<string, string>> {
   const env: Record<string, string> = {};
   for (const key of MANAGED_CREDENTIAL_KEYS) env[key] = byKey.get(key)?.trim() ?? "";
   return env;
+}
+
+/**
+ * 清理 `~/.dsh/profiles` 下**残留的写锁**（stale writer lock）的 node 脚本。
+ *
+ * 背景：引擎启动要执行 `healProfilesModuleFallback`（修 profiles 的 node_modules），须先获取
+ * `~/.dsh/profiles/node_modules.lock`。GUI 旧实现 30s 等不到端口就 `child.kill()`，引擎**持锁时被
+ * 杀** → 锁不释放 → 之后所有实例启动都抛 `atomic-write: timed out waiting for the writer lock`
+ * 并退出 → 表现为「所有候选命令均无法启动」。
+ *
+ * 判据**宁可少删不可误删**：只处理 `*.lock`；内容须是**合法正整数 PID**（不是数字的可能正在被写，
+ * 不动、只记名）；只有「PID 对应进程已不存在」才删——活着的锁绝不碰（可能是别的引擎正在 heal）。
+ * `process.kill(pid, 0)` 在 Windows 上：进程不存在抛 ESRCH，无权限抛 EPERM（= 进程存在）。
+ */
+const LOCK_CLEAN_SCRIPT = [
+  'const fs=require("fs"),path=require("path"),os=require("os");',
+  'const dir=path.join(os.homedir(),".dsh","profiles");',
+  "const out={checked:0,removed:[],alive:[],skipped:[]};",
+  "let names=[];",
+  "try{names=fs.readdirSync(dir)}catch(e){console.log(JSON.stringify(out));process.exit(0)}",
+  "for(const n of names){",
+  "  if(!/\\.lock$/i.test(n))continue;",
+  "  out.checked++;",
+  "  const p=path.join(dir,n);",
+  "  let pid=NaN;",
+  '  try{pid=parseInt(String(fs.readFileSync(p,"utf8")).trim(),10)}catch(e){}',
+  "  if(!(pid>0)){out.skipped.push(n);continue}",
+  "  let alive=false;",
+  '  try{process.kill(pid,0);alive=true}catch(e){alive=!!(e&&e.code==="EPERM")}',
+  '  if(alive){out.alive.push(n+"@"+pid);continue}',
+  '  try{fs.unlinkSync(p);out.removed.push(n+"@"+pid)}catch(e){out.skipped.push(n)}',
+  "}",
+  "console.log(JSON.stringify(out));",
+].join("\n");
+
+export interface StaleLockCleanupResult {
+  /** 扫到的 `*.lock` 数量 */
+  checked: number;
+  /** 判定为残留并删除的（`文件名@PID`） */
+  removed: string[];
+  /** 持有者仍存活、**故意没动**的 */
+  alive: string[];
+  /** 内容不是合法 PID（可能正在被写）而跳过的 */
+  skipped: string[];
+}
+
+/**
+ * 执行一次残留锁自愈（见 `LOCK_CLEAN_SCRIPT` 注释）。
+ *
+ * 为什么走 node 子进程而不是 Tauri fs API：capabilities 里 `fs:allow-remove` /
+ * `fs:allow-read-dir` / `fs:allow-exists` 都**不覆盖 `~/.dsh`**（只有 allow-read-text-file 覆盖），
+ * 扩 scope 等于放宽安全边界；而锁本来就是给引擎（node 进程）看的，用 node 处理最自然。
+ *
+ * **任何异常都降级为"没清理"，绝不阻断启动**（与外观/引擎的既有容错口径一致）。
+ */
+export async function clearStaleProfileLocks(): Promise<StaleLockCleanupResult> {
+  const empty: StaleLockCleanupResult = { checked: 0, removed: [], alive: [], skipped: [] };
+  try {
+    const out = await runCommand("node", ["-e", LOCK_CLEAN_SCRIPT], 10_000);
+    const raw = (out.stdout || "").trim().split(/\r?\n/).filter(Boolean).pop() ?? "";
+    if (!raw) {
+      diag("残留锁清理：无输出（node 不可用或脚本未执行）code=", out.code, out.stderr.slice(0, 200));
+      return empty;
+    }
+    const parsed = JSON.parse(raw) as Partial<StaleLockCleanupResult>;
+    const result: StaleLockCleanupResult = {
+      checked: Number(parsed.checked) || 0,
+      removed: Array.isArray(parsed.removed) ? parsed.removed : [],
+      alive: Array.isArray(parsed.alive) ? parsed.alive : [],
+      skipped: Array.isArray(parsed.skipped) ? parsed.skipped : [],
+    };
+    // 只在"确实扫到了锁"时记日志，避免每次正常启动都刷一行噪声
+    if (result.checked > 0) diag("残留锁清理:", JSON.stringify(result));
+    if (result.removed.length > 0) {
+      console.warn("[dsh] 已清理残留写锁（上次引擎被强杀导致）:", result.removed.join(", "));
+    }
+    return result;
+  } catch (e) {
+    diag("残留锁清理异常（忽略，不阻断启动）:", String(e).slice(0, 200));
+    return empty;
+  }
 }
 
 function candidateCommands(args: string[], localBin: string | null): Array<[string, string[]]> {
@@ -442,6 +542,51 @@ export async function getDshVersion(): Promise<string> {
 }
 
 /**
+ * 组装引擎启动参数。
+ * @param port 监听端口
+ * @param patchPath 覆盖层绝对路径（null 表示不带覆盖层）
+ * @returns argv 数组
+ *
+ * 顺序有语义：`--patch` 是 dsh 的**父级**选项，`--port/--host` 属于 web app
+ * 自己的参数（commander 的 passThroughOptions 会把它们之后的内容原样转交），
+ * 因此父级选项必须排在前面。
+ */
+export function buildEngineArgs(port: number, patchPath: string | null): string[] {
+  return [
+    "--profile",
+    "web",
+    ...(patchPath === null ? [] : ["--patch", patchPath]),
+    "--port",
+    String(port),
+    "--host",
+    "127.0.0.1",
+  ];
+}
+
+/**
+ * 强杀一个进程**及其整棵子树**。
+ *
+ * 为什么不能只用 `child.kill()`：Windows 上它只终止直接子进程，引擎派生的工作进程会存活，
+ * 并继续持有 `~/.dsh/profiles/node_modules.lock` —— 于是**下一个候选**必然卡在
+ * `atomic-write: timed out waiting for the writer lock`。
+ * （2026-09-14 实测：候选 1 被 kill 后，候选 2 / 4 全部因锁失败，日志里 `pid=3136` 的进程
+ * 在超时后仍活着持锁。）
+ *
+ * 用 `taskkill /T /F`（capabilities 已声明 taskkill）。杀完调用方**必须再清一次残留锁**
+ * ——强杀时引擎来不及释放锁（见 startEngine 超时分支里的 clearStaleProfileLocks）。
+ */
+async function killProcessTree(pid: number | undefined): Promise<void> {
+  if (typeof pid !== "number" || !Number.isFinite(pid) || pid <= 0) return;
+  try {
+    await Command.create("taskkill", ["/PID", String(pid), "/T", "/F"]).execute();
+  } catch {
+    /* 进程可能已退出（taskkill 对不存在的 PID 返回非 0） */
+  }
+  // taskkill 返回 ≠ 句柄已回收：给内核一点时间真正退出，避免"锁的持有者还活着"导致清锁被拒
+  await new Promise((r) => setTimeout(r, 800));
+}
+
+/**
  * 启动 dsh web 引擎。
  * 安全策略：先扫描用户已有实例（网页版 dsh 正在跑则直接复用，绝不 spawn 第二个
  * 实例——双实例会争抢 ~/.dsh 的会话存储，可能破坏正在运行的任务）。
@@ -477,24 +622,62 @@ export async function startEngine(preferredPort = DEFAULT_PORT, force = false): 
   currentPort = port;
   emit({ status: "starting", port, url: `http://127.0.0.1:${port}` });
 
-  const args = ["--profile", "web", "--port", String(port), "--host", "127.0.0.1"];
+  // 3.5 **启动前自愈**：清掉上一次引擎被强杀留下的残留写锁。
+  // 少了这一步，残留锁会让**每一个**候选都卡在 "timed out waiting for the writer lock" 而失败，
+  // 界面表现为「所有候选命令均无法启动」。（幂等、只删死进程持有的锁，见 clearStaleProfileLocks）
+  await clearStaleProfileLocks();
+
+  // 启动覆盖层：把工作区目录选择固定为应用内 browse 选择器（原生选择框没有
+  // owner 窗口，宽屏上会跑到应用窗口之外且不置顶）。写盘失败则退化为无覆盖层。
+  const patchPath = await ensureEnginePatchFile();
+  if (patchPath === null) diag("覆盖层写入失败，按无覆盖层启动（目录选择回退为原生选择框）");
+  const args = buildEngineArgs(port, patchPath);
   // 候选命令共用同一份凭据环境：受管存储有值即写真值（见 MANAGED_CREDENTIAL_KEYS）
   const managedEnv = await managedCredentialEnv();
+
+  /** 每个候选的真实结果——拼进最终错误信息（替代过去那句会把用户带偏的「重装引擎」提示） */
+  const attempts: string[] = [];
+  /** 引擎最近的输出（stdout+stderr 合并的环形缓冲）——失败时给用户看最后几行真因 */
+  const engineTail: string[] = [];
+  const pushTail = (line: unknown) => {
+    const t = String(line).trim();
+    if (!t) return;
+    engineTail.push(t.slice(0, 200));
+    if (engineTail.length > 30) engineTail.shift();
+  };
 
   for (const [prog, cmdArgs] of candidateCommands(args, await findDshBinJs(pinnedVersion))) {
     diag("尝试候选:", prog, cmdArgs);
     try {
       const c = Command.create(prog, cmdArgs, { env: managedEnv });
+      // **进程退出感知**：必须在 spawn 之前注册——毫秒级退出会与 spawn 竞争，事件一旦丢失
+      // 就退化成"傻等到 deadline"，这正是旧实现每次硬等满 30s 的原因（引擎其实早就报错退出了）。
+      let exited = false;
+      c.on("close", ({ code }) => {
+        exited = true;
+        diag("候选进程退出:", prog, "code=", code);
+      });
+      c.on("error", (errMsg) => {
+        exited = true;
+        diag("候选进程 error:", prog, String(errMsg));
+      });
       c.stdout.on("data", (line) => {
+        pushTail(line);
         console.log("[dsh]", line);
       });
       c.stderr.on("data", (line) => {
+        pushTail(line);
+        // 引擎的真实错误（如 `atomic-write: timed out waiting for the writer lock`）走 stderr，
+        // **必须落进诊断日志**：否则 dsh-spawn.log 里只剩 "spawn 成功 / 候选超时"，真因完全不可见
+        // （2026-09-14 排查时最大的障碍就是这条）。
+        diag("引擎stderr:", String(line).trim().slice(0, 300));
         console.error("[dsh]", line);
       });
       child = await c.spawn();
       diag("spawn 成功:", prog, "pid=", child.pid);
 
-      // 等待健康
+      // 等待健康：**进程活着就继续等**（首次启动要 heal profiles，可能较久，不该打断）；
+      // 进程退出则立即换下一个候选，不再空等满 deadline。
       const deadline = Date.now() + MAX_START_WAIT_MS;
       while (Date.now() < deadline) {
         if (await probePort(port, 600)) {
@@ -502,23 +685,38 @@ export async function startEngine(preferredPort = DEFAULT_PORT, force = false): 
           emit(h);
           return h;
         }
+        if (exited) break;
         await new Promise((r) => setTimeout(r, 400));
       }
-      diag("候选超时:", prog);
-      // 该候选启动超时：杀掉并试下一个
-      try {
-        await child.kill();
-      } catch {
-        /* already dead */
+      if (exited) {
+        attempts.push(`${prog}（进程已退出）`);
+        diag("候选进程已退出，试下一个:", prog);
+      } else {
+        attempts.push(`${prog}（等待 ${Math.round(MAX_START_WAIT_MS / 1000)}s 仍无端口）`);
+        diag("候选超时:", prog);
+        // 超时说明进程**还活着**：必须连子树一起强杀，否则它的子进程会继续持有写锁
+        await killProcessTree(child?.pid);
       }
       child = null;
+      // 无论"进程自己退出"还是"被我们杀掉"，都可能留下写锁（崩溃 / 强杀时来不及释放）——
+      // 不清掉的话，下一个候选会直接死在锁上（2026-09-14 实测的连锁失败）。
+      await clearStaleProfileLocks();
     } catch (e) {
-      diag("spawn 失败:", prog, String(e));
+      const why = e instanceof Error ? e.message : String(e);
+      attempts.push(`${prog}（${why.slice(0, 80)}）`);
+      diag("spawn 失败:", prog, why);
       console.warn(`[dsh] spawn candidate failed: ${prog}`, e);
     }
   }
 
-  const msg = `dsh web 启动失败：所有候选命令均无法启动（请在 git-bash 中执行 pnpm install -g @deepseek-ai/dsh 后重试）`;
+  // 失败信息给**真因**：逐个候选的结果 + 引擎最后几行 + 日志位置。
+  // 过去那句「请在 git-bash 中执行 pnpm install -g @deepseek-ai/dsh 后重试」会把人带偏——
+  // 实际往往是**本机已装引擎**、真正原因是残留锁或引擎自身报错，重装无效。
+  const tail = engineTail.slice(-3).join(" / ");
+  const lockHint = /writer lock|timed out waiting/i.test(engineTail.join(" "))
+    ? "；引擎在等 ~/.dsh/profiles 的写锁（多为上次引擎被强杀留下的残留锁，本次已尝试自动清理）"
+    : "";
+  const msg = `dsh web 启动失败：${attempts.join("；")}${lockHint}${tail ? `。引擎最后输出：${tail}` : ""}（完整日志：${DIAG_LOG}）`;
   emit({ status: "error", port, url: `http://127.0.0.1:${port}`, error: msg });
   throw new Error(msg);
 }

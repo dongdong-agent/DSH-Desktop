@@ -58,6 +58,12 @@ export function EngineLauncher() {
       await startEngine();
     } catch {
       // 错误状态已通过 health 广播
+    } finally {
+      // **必须复位**：这个标记只该表示「一次启动尝试正在进行中」。
+      // 不复位的话，一次失败就会让按钮永久停在「正在启动引擎…」且不可点，同时 App 因
+      // `!running && !launchRequested` 不成立而永远显示「引擎启动中…」——用户以为卡死，
+      // 实际只是**无法重试**（2026-09-14 实测：只能重启应用才能再试）。
+      setLaunchRequested(false);
     }
   };
 

@@ -50,7 +50,10 @@ import {
   loadVerifiedVersions,
   addVerifiedVersion,
   restartEngine,
+  startEngine,
+  clearStaleProfileLocks,
   managedCredentialEnv,
+  buildEngineArgs,
 } from "./dshEngine";
 
 const APP_DATA = "C:\\Users\\demo\\AppData\\Roaming\\com.dsh.desktop\\";
@@ -381,5 +384,170 @@ describe("managedCredentialEnv（受管凭据注入引擎子进程环境）", ()
     fsMocks.readTextFile.mockRejectedValue(new Error("文件不存在"));
     const env = await managedCredentialEnv();
     expect(Object.values(env).every((v) => v === "")).toBe(true);
+  });
+});
+
+// ---------- 启动参数：目录选择覆盖层 ----------
+
+describe("buildEngineArgs（--patch 必须排在 web app 自己的参数之前）", () => {
+  it("带覆盖层时 --patch 紧跟 --profile，位于 --port/--host 之前", () => {
+    expect(buildEngineArgs(3080, "C:\\patch\\pin.yml")).toEqual([
+      "--profile",
+      "web",
+      "--patch",
+      "C:\\patch\\pin.yml",
+      "--port",
+      "3080",
+      "--host",
+      "127.0.0.1",
+    ]);
+  });
+
+  it("覆盖层不可用时退化为不带 --patch 的启动参数", () => {
+    expect(buildEngineArgs(3080, null)).toEqual(["--profile", "web", "--port", "3080", "--host", "127.0.0.1"]);
+  });
+});
+
+// ---------- 残留写锁自愈（2026-09-14 实测的启动失败真因） ----------
+
+/**
+ * 复刻真实故障：引擎启动要 heal profiles（须先拿 `~/.dsh/profiles/node_modules.lock`），
+ * 若上次引擎**持锁时被强杀**，锁残留 → 之后每个实例启动都抛
+ * `atomic-write: timed out waiting for the writer lock` 并退出 → 「所有候选命令均无法启动」。
+ */
+describe("残留写锁自愈（stale writer lock）", () => {
+  /** spawn 后立刻输出给定 stdout/stderr 行并以 code 退出 —— 复刻"引擎起不来"的最短路径 */
+  function stubShellExitsWith(code: number, out: { stdout?: string[]; stderr?: string[] } = {}) {
+    shellMocks.create.mockImplementation(() => {
+      const cmd = {
+        stdout: { on: vi.fn() },
+        stderr: { on: vi.fn() },
+        on: vi.fn(),
+        spawn: vi.fn(async () => {
+          cmd.stdout.on.mock.calls
+            .filter((c: unknown[]) => c[0] === "data")
+            .forEach((c: unknown[]) => {
+              (out.stdout ?? []).forEach((l) => (c[1] as (d: string) => void)?.(`${l}\n`));
+            });
+          cmd.stderr.on.mock.calls
+            .filter((c: unknown[]) => c[0] === "data")
+            .forEach((c: unknown[]) => {
+              (out.stderr ?? []).forEach((l) => (c[1] as (d: string) => void)?.(`${l}\n`));
+            });
+          cmd.on.mock.calls.find((c: unknown[]) => c[0] === "close")?.[1]?.({ code, signal: null });
+          return { pid: 1, kill: vi.fn() };
+        }),
+      };
+      return cmd;
+    });
+  }
+
+  it("解析脚本输出：残留锁（持有者已死）被删除，活锁保留", async () => {
+    stubShellExitsWith(0, {
+      stdout: ['{"checked":2,"removed":["node_modules.lock@25016"],"alive":["other.lock@999"],"skipped":[]}'],
+    });
+
+    const r = await clearStaleProfileLocks();
+
+    expect(r.removed).toEqual(["node_modules.lock@25016"]);
+    expect(r.alive).toEqual(["other.lock@999"]);
+    // 脚本必须**真的**做「探活 + 删除」，而不是打印一个假结果（否则"自愈"是空转）
+    const script = (shellMocks.create.mock.calls[0][1] as string[])[1];
+    expect(script).toContain("process.kill(pid,0)");
+    expect(script).toContain("unlinkSync");
+    // 且只动 ~/.dsh/profiles 目录
+    expect(script).toContain('".dsh"');
+    expect(script).toContain('"profiles"');
+  });
+
+  it("脚本无输出 / 非 JSON（node 不可用等）时降级为空结果，不抛错也不阻断启动", async () => {
+    stubShellExitsWith(0, { stdout: ["not-json"] });
+    expect(await clearStaleProfileLocks()).toEqual({ checked: 0, removed: [], alive: [], skipped: [] });
+
+    // 连 stdout 都没有（例如 node 不存在）
+    stubShellExitsWith(1, {});
+    expect(await clearStaleProfileLocks()).toEqual({ checked: 0, removed: [], alive: [], skipped: [] });
+  });
+
+  it("所有候选都失败时：错误信息给出每个候选的真实结果 + 引擎 stderr + 锁提示，且不再出现误导性的「重装引擎」", async () => {
+    stubKernelDir(["0.1.1-rc.2"]); // 本机**已装**内核 —— 所以旧提示"重装引擎"是错的方向
+    const LOCK_ERR =
+      "Error: atomic-write: timed out waiting for the writer lock at C:\\Users\\demo\\.dsh\\profiles\\node_modules.lock";
+    stubShellExitsWith(1, { stderr: [LOCK_ERR] });
+    httpMocks.tauriFetch.mockRejectedValue(new Error("没有引擎在跑"));
+
+    const err = (await startEngine(17800).catch((e: unknown) => e)) as Error;
+
+    // ① 不再把用户带偏（旧文案："请在 git-bash 中执行 pnpm install -g @deepseek-ai/dsh 后重试"）
+    expect(err.message).not.toContain("pnpm install -g");
+    // ② 逐个候选的真实结果（进程退出会被立即感知，而不是傻等满 deadline）
+    expect(err.message).toContain("进程已退出");
+    // ③ 真因可见：引擎自己的 stderr 里那句写锁超时被带出来
+    expect(err.message).toContain("writer lock");
+    // ④ 引擎 stderr 必须**落进诊断日志**（旧实现只 console.error，日志里看不到真因）
+    const loggedEngineStderr = fsMocks.writeTextFile.mock.calls.some(
+      (c: unknown[]) => c[0] === "C:\\Windows\\Temp\\dsh-spawn.log" && String(c[1]).includes("引擎stderr"),
+    );
+    expect(loggedEngineStderr).toBe(true);
+  });
+
+  it("回归：单个候选的等待上限不会再缩回小值（旧值会让 heal 中途的引擎被杀，从而产生残留锁）", async () => {
+    const fs = await import("node:fs");
+    const src = fs.readFileSync(new URL("./dshEngine.ts", import.meta.url), "utf8");
+    const m = /const MAX_START_WAIT_MS = ([\d_]+);/.exec(src);
+    expect(m).not.toBeNull();
+    // 2026-09-14 实测冷启动 heal 会跑满 180s 仍未完成 → 上限必须给足（当前 600s）
+    expect(Number(m![1].replace(/_/g, ""))).toBeGreaterThanOrEqual(300_000);
+  });
+
+  it("候选超时：taskkill /T /F 连子树强杀，且每个候选之后都重新清一次残留锁", async () => {
+    vi.useFakeTimers();
+    try {
+      stubKernelDir(["0.1.1-rc.2"]); // 有本地内核 → 候选 1 是 node + bin.js
+      const LOCK_OK = '{"checked":0,"removed":[],"alive":[],"skipped":[]}';
+      const isLockScript = (prog: unknown, args: unknown) =>
+        prog === "node" && Array.isArray(args) && args[0] === "-e";
+      shellMocks.create.mockImplementation((prog: string, args: unknown) => {
+        if (prog === "taskkill") {
+          return { execute: vi.fn().mockResolvedValue({ code: 0, stdout: "", stderr: "" }) };
+        }
+        const cmd = {
+          stdout: { on: vi.fn() },
+          stderr: { on: vi.fn() },
+          on: vi.fn(),
+          spawn: vi.fn(async () => {
+            if (isLockScript(prog, args)) {
+              // 清锁脚本：立刻输出结果并退出
+              cmd.stdout.on.mock.calls
+                .filter((c: unknown[]) => c[0] === "data")
+                .forEach((c: unknown[]) => (c[1] as (d: string) => void)?.(`${LOCK_OK}\n`));
+              cmd.on.mock.calls.find((c: unknown[]) => c[0] === "close")?.[1]?.({ code: 0, signal: null });
+            }
+            // 引擎候选：spawn 成功、但**永不退出也永不开端口** → 只能由 deadline 结束
+            return { pid: 4242, kill: vi.fn() };
+          }),
+        };
+        return cmd;
+      });
+      httpMocks.tauriFetch.mockRejectedValue(new Error("无引擎在跑"));
+
+      const settled = startEngine(17800).catch((e: unknown) => e);
+      // 4 个候选 ×（上限 + 收尾等待）全部推进完
+      await vi.advanceTimersByTimeAsync(4 * (600_000 + 5_000));
+      const err = (await settled) as Error;
+
+      // ① 必须用 taskkill /T /F 连子树强杀 —— 旧实现只 child.kill()，
+      //    引擎的工作进程会活下来继续持有 ~/.dsh/profiles 的写锁
+      const tk = shellMocks.create.mock.calls.filter((c: unknown[]) => c[0] === "taskkill");
+      expect(tk.length).toBeGreaterThan(0);
+      expect(tk[0][1] as string[]).toEqual(expect.arrayContaining(["/T", "/F", "4242"]));
+      // ② 每个候选之后都重新清锁（否则下一个候选直接死在锁上）
+      const cleans = shellMocks.create.mock.calls.filter((c: unknown[]) => isLockScript(c[0], c[1]));
+      expect(cleans.length).toBeGreaterThan(1);
+      // ③ 错误信息仍可读
+      expect(err.message).toContain("仍无端口");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

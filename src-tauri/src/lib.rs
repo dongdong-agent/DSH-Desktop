@@ -1,8 +1,71 @@
+use std::sync::Mutex;
+
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Manager,
 };
+
+/// 当前引擎端口（前端登记，供托盘「完全退出」按端口强杀引擎进程）。
+///
+/// 引擎由前端（shell 插件）spawn，就绪后主窗口会**顶层导航**到引擎页，
+/// 壳的 JS 上下文随之被替换——托盘事件再也回不到前端。因此杀引擎的动作
+/// 必须放在 Rust 侧，前端只负责在健康状态变化时把端口登记进来。
+#[derive(Default)]
+struct EnginePort(Mutex<Option<u16>>);
+
+/// 前端登记 / 清除当前引擎端口（None = 引擎未运行，避免误杀后续占用该端口的进程）。
+#[tauri::command]
+fn set_engine_port(port: Option<u16>, state: tauri::State<'_, EnginePort>) {
+    if let Ok(mut p) = state.0.lock() {
+        *p = port;
+    }
+}
+
+/// netstat -ano 找 LISTENING 在该端口的 PID → taskkill /PID <pid> /T /F（连同子进程）。
+/// Windows GUI 子系统下用 CREATE_NO_WINDOW 避免闪出控制台窗口。
+#[cfg(windows)]
+fn kill_port_owner(port: u16) {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let Ok(out) = std::process::Command::new("netstat")
+        .arg("-ano")
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+    else {
+        return;
+    };
+    let text = String::from_utf8_lossy(&out.stdout);
+    let suffix = format!(":{port}");
+    for line in text.lines() {
+        let cols: Vec<&str> = line.split_whitespace().collect();
+        // 形如：TCP  127.0.0.1:17800  0.0.0.0:0  LISTENING  12345
+        if cols.len() < 5 || cols[0] != "TCP" || cols[3] != "LISTENING" || !cols[1].ends_with(&suffix) {
+            continue;
+        }
+        if let Ok(pid) = cols[4].parse::<u32>() {
+            let _ = std::process::Command::new("taskkill")
+                .args(["/PID", &pid.to_string(), "/T", "/F"])
+                .creation_flags(CREATE_NO_WINDOW)
+                .output();
+        }
+        return;
+    }
+}
+
+/// 非 Windows 平台无 netstat / taskkill 语义，退化为只退出 GUI。
+#[cfg(not(windows))]
+fn kill_port_owner(_port: u16) {}
+
+/// 托盘「完全退出」：先按登记的端口强杀引擎进程（含子进程），再退出 GUI。
+/// 纯 Rust 实现，不依赖前端 JS，因此导航到引擎页后依然有效。
+fn quit_all(app: &tauri::AppHandle) {
+    let port = app.state::<EnginePort>().0.lock().ok().and_then(|p| *p);
+    if let Some(port) = port {
+        kill_port_owner(port);
+    }
+    app.exit(0);
+}
 
 /// 打开 / 聚焦 WebView 开发者调试器（F12）
 #[tauri::command]
@@ -78,11 +141,13 @@ pub fn run() {
                 let _ = w.set_focus();
             }
         }))
+        .manage(EnginePort::default())
         .invoke_handler(tauri::generate_handler![
             open_devtools,
             close_devtools,
             open_engine_in_main,
-            quit_app
+            quit_app,
+            set_engine_port
         ])
         .setup(|app| {
             // 系统托盘：最小化到托盘后可从这里恢复窗口 / 打开管理界面 / 退出
@@ -95,7 +160,9 @@ pub fn run() {
                 None::<&str>,
             )?;
             let quit = MenuItem::with_id(app, "quit", "退出（不影响后台引擎）", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show, &manage, &quit])?;
+            let quit_all_item =
+                MenuItem::with_id(app, "quit-all", "完全退出（同时关闭引擎）", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&show, &manage, &quit, &quit_all_item])?;
 
             TrayIconBuilder::with_id("main-tray")
                 .icon(app.default_window_icon().unwrap().clone())
@@ -130,6 +197,10 @@ pub fn run() {
                     // 引擎是共享的 node 进程，退出 GUI 不停引擎
                     "quit" => {
                         app.exit(0);
+                    }
+                    // 完全退出：连同引擎一起关掉（Rust 侧按端口强杀，导航到引擎页后仍可用）
+                    "quit-all" => {
+                        quit_all(app);
                     }
                     _ => {}
                 })
