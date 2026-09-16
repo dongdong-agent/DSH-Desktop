@@ -307,9 +307,13 @@ export function isKernelInstalling(): boolean {
  */
 async function detectPackageManager(): Promise<"pnpm.cmd" | "npm.cmd"> {
   try {
-    const home = await homeDir().catch(() => "");
+    // homeDir() 不带尾分隔符，必须先 normalize 再拼，否则会得到
+    // `C:\Users\<user>AppData\Roaming\npm\pnpm.cmd` 这种不存在的路径 ——
+    // 探测恒为 false，静默退回 npm 兜底（表现为"pnpm 明明装了却走 npm"，
+    // 而 npm 装 dsh 依赖树会 100% CPU 卡死、永不写 node_modules）。
+    const home = (await homeDir().catch(() => "")).replace(/[\\/]+$/, "");
     // pnpm 的 npm 全局 shim 位置（pnpm.cmd 比 pnpm 更稳：不依赖 bash shim）
-    const pnpmCmd = home ? `${home}AppData\\Roaming\\npm\\pnpm.cmd` : "";
+    const pnpmCmd = home ? `${home}\\AppData\\Roaming\\npm\\pnpm.cmd` : "";
     if (pnpmCmd && (await exists(pnpmCmd).catch(() => false))) return "pnpm.cmd";
   } catch {
     /* 探测失败走 npm.cmd */

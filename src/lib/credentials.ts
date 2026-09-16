@@ -45,8 +45,15 @@ const TOP_LINE_PATTERN = /^([^\s#][^:]*):[ \t]*(.*)$/;
 
 /** 受管存储文件路径：~/.dsh/.credentials.yaml */
 async function credentialsFile(): Promise<string> {
-  const home = await homeDir();
-  return `${home}.dsh\\.credentials.yaml`;
+  // homeDir() **不带尾分隔符**（Tauri v2 / dirs crate 的行为，与 dshEngine.ts 的同类注释一致），
+  // 所以必须先 normalize 再拼。漏掉分隔符的后果不是"报错"而是**静默失效**：
+  // 会拼成 `C:\Users\<user>.dsh\.credentials.yaml` —— 一个既不存在的路径，也不在
+  // fs scope `$HOME/.dsh/**` 之内。readTextFile 抛错后被本模块的 catch 吞掉、返回空列表，
+  // 于是 managedCredentialEnv() 把全部受管键写成空字符串，引擎派生的 MCP 子进程
+  // （agnes / rkapi 等只认环境变量的）启动即报 "API key is required"。
+  // normalize 对"带尾 / 不带尾"两种 homeDir 行为都成立，因此这里统一去掉尾分隔符。
+  const home = (await homeDir()).replace(/[\\/]+$/, "");
+  return `${home}\\.dsh\\.credentials.yaml`;
 }
 
 type Layout = "empty" | "canonical" | "legacy-flat";

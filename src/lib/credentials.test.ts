@@ -60,6 +60,21 @@ describe("readCredentials（结构化读取）", () => {
     ]);
   });
 
+  it("homeDir 不带尾分隔符时仍拼出正确路径（回归：曾拼成 C:\\Users\\demo.dsh\\...）", async () => {
+    // 真实 Tauri v2 环境的行为：homeDir() 返回 "C:\Users\demo"（无尾分隔符）。
+    // 旧实现直接 `${home}.dsh\...`，会拼出 C:\Users\demo.dsh\... —— 路径不存在且
+    // 落在 fs scope 之外，readTextFile 抛错被静默吞掉，凭据全空（MCP 因此拿不到 key）。
+    pathMocks.homeDir.mockResolvedValue("C:\\Users\\demo");
+    await readCredentials();
+    expect(fsMocks.readTextFile).toHaveBeenCalledWith(CRED_PATH);
+  });
+
+  it("homeDir 带尾分隔符时同样只拼一个分隔符（不会出现双反斜杠）", async () => {
+    pathMocks.homeDir.mockResolvedValue("C:\\Users\\demo\\");
+    await readCredentials();
+    expect(fsMocks.readTextFile).toHaveBeenCalledWith(CRED_PATH);
+  });
+
   it("文件不存在时返回空列表", async () => {
     fsMocks.readTextFile.mockRejectedValue(new Error("No such file or directory (os error 2)"));
     expect(await readCredentials()).toEqual([]);

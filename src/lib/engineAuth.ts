@@ -53,7 +53,11 @@ function b64urlDecode(value: string): Uint8Array | null {
  */
 export async function readBrowserSessionSecret(): Promise<string | null> {
   try {
-    const home = await homeDir();
+    // 与 credentials.ts 采用同一约定：homeDir() 不带尾分隔符，normalize 后统一补一个。
+    // 旧写法 `${home}\\.dsh\\...` 只在"不带尾"时才正确；一旦拼出双分隔符
+    // （`C:\Users\x\\.dsh\...`），字符串 glob scope（$HOME/.dsh/**）未必匹配，
+    // 读不到就静默返回 null，页面会退化成 401。
+    const home = (await homeDir()).replace(/[\\/]+$/, "");
     const txt = await readTextFile(`${home}\\.dsh\\.credentials.yaml`);
     const lines = txt.split(/\r?\n/);
     const start = lines.findIndex((l) => l.trim().startsWith(`${SECRET_RECORD}:`));
