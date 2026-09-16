@@ -69,13 +69,76 @@ fn kill_port_owner(port: u16) {
 #[cfg(not(windows))]
 fn kill_port_owner(_port: u16) {}
 
-/// 托盘「完全退出」：先按登记的端口强杀引擎进程（含子进程），再退出 GUI。
+/// 引擎被强杀后清理 `~/.dsh/profiles` 的残留写锁。
+///
+/// 与前端 `clearStaleProfileLocks` 同语义（宁可少删不可误删）：只删「持有者已死」的锁；
+/// 活着的锁可能属于另一个仍在运行的 dsh 实例（用户网页版），绝不碰。
+/// 2026-09-16 补：托盘「完全退出」强杀引擎**必留**此锁（taskkill 不给引擎释放机会），
+/// 此前只靠下次启动时前端自愈——若用户退出后手动跑 `dsh web` 或别的工具，会直接撞锁。
+#[cfg(windows)]
+fn clear_stale_profile_locks() {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let Ok(user_profile) = std::env::var("USERPROFILE") else {
+        return;
+    };
+    let dir = std::path::Path::new(&user_profile).join(".dsh").join("profiles");
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return;
+    };
+    // 探活：tasklist 按 PID 过滤，输出里含该 PID 数字即存活；
+    // 不存在时输出是本地化的「没有匹配任务」文案、不含数字 ⇒ 判死。
+    // 探活本身失败（命令不可用等）时当作活着 —— 宁可少删。
+    let pid_alive = |pid: u32| -> bool {
+        let Ok(out) = std::process::Command::new("tasklist")
+            .args(["/FI", &format!("PID eq {pid}"), "/NH"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+        else {
+            return true;
+        };
+        String::from_utf8_lossy(&out.stdout).contains(&pid.to_string())
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("lock") {
+            continue;
+        }
+        let Ok(content) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        // 锁文件内容约定为持有者 PID（正整数）；读不出合法 PID 的可能正在被写，不动
+        let Ok(pid) = content.trim().parse::<u32>() else {
+            continue;
+        };
+        if pid == 0 || !pid_alive(pid) {
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn clear_stale_profile_locks() {}
+
+/// 托盘「完全退出」：按登记的端口强杀引擎进程（含子进程），等端口真正释放，
+/// 清掉强杀必留的写锁，让下一次启动等价于一次干净的重启 —— 再退出 GUI。
 /// 纯 Rust 实现，不依赖前端 JS，因此导航到引擎页后依然有效。
 fn quit_all(app: &tauri::AppHandle) {
     // 只认「此刻在跑」的端口：引擎未运行时不动手，避免误杀后续占用同一端口的其他进程。
     let port = app.state::<EnginePort>().current.lock().ok().and_then(|p| *p);
     if let Some(port) = port {
         kill_port_owner(port);
+        // 强杀来不及释放引擎内部资源，写锁必然残留（下次启动虽有自愈，但退出后的
+        // 系统应当是干净的：用户紧接着手动跑 `dsh web` 不会再撞锁）。
+        clear_stale_profile_locks();
+        // 等端口真正释放（最多 ~3s）：确认引擎树死透，下次启动的端口探测不被残进程干扰。
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while std::time::Instant::now() < deadline {
+            if std::net::TcpStream::connect(("127.0.0.1", port)).is_err() {
+                break; // 连不上 = 已无监听
+            }
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
     }
     app.exit(0);
 }
