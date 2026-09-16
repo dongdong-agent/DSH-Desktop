@@ -15,6 +15,7 @@ const fsMocks = vi.hoisted(() => ({
   remove: vi.fn(),
 }));
 const httpMocks = vi.hoisted(() => ({ tauriFetch: vi.fn() }));
+const coreMocks = vi.hoisted(() => ({ invoke: vi.fn() }));
 const pathMocks = vi.hoisted(() => ({ homeDir: vi.fn(), appDataDir: vi.fn() }));
 
 vi.mock("@tauri-apps/plugin-shell", () => ({
@@ -30,6 +31,9 @@ vi.mock("@tauri-apps/plugin-fs", () => ({
 }));
 vi.mock("@tauri-apps/plugin-http", () => ({
   fetch: httpMocks.tauriFetch,
+}));
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: coreMocks.invoke,
 }));
 vi.mock("@tauri-apps/api/path", () => ({
   homeDir: pathMocks.homeDir,
@@ -111,6 +115,7 @@ beforeEach(async () => {
   fsMocks.readTextFile.mockReset().mockRejectedValue(new Error("文件不存在"));
   fsMocks.remove.mockReset().mockResolvedValue(undefined);
   httpMocks.tauriFetch.mockReset().mockRejectedValue(new Error("无 Tauri 运行时"));
+  coreMocks.invoke.mockReset().mockRejectedValue(new Error("无 Tauri 运行时"));
   pathMocks.homeDir.mockReset().mockResolvedValue(HOME);
   pathMocks.appDataDir.mockReset().mockResolvedValue(APP_DATA);
   // pin 置空并清空版本缓存（pinEngineVersion 内部同时清 bin.js 缓存与版本缓存）
@@ -633,56 +638,51 @@ describe("probeEngineReady（业务就绪探针）", () => {
     "",
   ].join("\n");
 
-  it("session/list RPC 返回 ok:true ⇒ ready，且请求带自签 Cookie 与正确的 Connection RPC 信封", async () => {
+  it("session/list RPC 返回 ok:true ⇒ ready，且请求经 Rust 侧带自签 Cookie 发出", async () => {
     fsMocks.readTextFile.mockResolvedValue(SECRET_YAML);
-    httpMocks.tauriFetch.mockResolvedValue({
+    coreMocks.invoke.mockResolvedValue({
+      status: 200,
       ok: true,
-      json: () =>
-        Promise.resolve({
-          type: "server-response",
-          rpcId: "gui-ready-probe",
-          result: { ok: true, value: { items: [] } },
-        }),
+      body: JSON.stringify({
+        type: "server-response",
+        rpcId: "gui-ready-probe",
+        result: { ok: true, value: { items: [] } },
+      }),
     });
 
     const state = await probeEngineReady(17800);
 
     expect(state).toBe("ready");
-    // 判据必须打在真实业务端点上（URL + 信封 + args 形状都对，缺一不可）
-    expect(String(httpMocks.tauriFetch.mock.calls[0][0])).toBe("http://127.0.0.1:17800/api/session/list");
-    const init = httpMocks.tauriFetch.mock.calls[0][1] as RequestInit;
-    const headers = init.headers as Record<string, string>;
-    expect(headers.Cookie).toMatch(/^dsh-auth-.+=v1\./);
-    const body = JSON.parse(String(init.body));
-    expect(body).toMatchObject({
-      type: "client-request",
-      method: "session/list",
-      payload: { args: { _request: {} } },
-    });
+    // 探针必须走 Rust 侧命令（plugin-http 的 Origin 被固定为壳站点 → 引擎 403，见 lib.rs）
+    expect(coreMocks.invoke).toHaveBeenCalledTimes(1);
+    const [cmd, args] = coreMocks.invoke.mock.calls[0] as [string, { port: number; cookie: string }];
+    expect(cmd).toBe("probe_engine_ready");
+    expect(args.port).toBe(17800);
+    expect(args.cookie).toMatch(/^dsh-auth-.+=v1\./);
   });
 
   it("读不到会话签名密钥 ⇒ unavailable（调用方立即放行，不得让无凭据环境白等预算）", async () => {
     fsMocks.readTextFile.mockRejectedValue(new Error("文件不存在"));
     expect(await probeEngineReady(17800)).toBe("unavailable");
-    expect(httpMocks.tauriFetch).not.toHaveBeenCalled();
+    expect(coreMocks.invoke).not.toHaveBeenCalled();
   });
 
   it("HTTP 401（端口在但鉴权未过）⇒ not-ready，不是 ready", async () => {
     fsMocks.readTextFile.mockResolvedValue(SECRET_YAML);
-    httpMocks.tauriFetch.mockResolvedValue({ ok: false, status: 401, json: () => Promise.resolve({}) });
+    coreMocks.invoke.mockResolvedValue({ status: 401, ok: false, body: "dsh web authentication required" });
     expect(await probeEngineReady(17800)).toBe("not-ready");
   });
 
   it("HTTP 200 但 result.ok:false（endpoint 未认领 / 判据失效）⇒ not-ready", async () => {
     fsMocks.readTextFile.mockResolvedValue(SECRET_YAML);
-    httpMocks.tauriFetch.mockResolvedValue({
-      ok: true,
-      json: () =>
-        Promise.resolve({
-          type: "server-response",
-          rpcId: "x",
-          result: { ok: false, error: { code: "gateway/internal", message: "x", details: {} } },
-        }),
+    coreMocks.invoke.mockResolvedValue({
+      status: 200,
+      ok: false,
+      body: JSON.stringify({
+        type: "server-response",
+        rpcId: "x",
+        result: { ok: false, error: { code: "gateway/internal", message: "x", details: {} } },
+      }),
     });
     expect(await probeEngineReady(17800)).toBe("not-ready");
   });
@@ -719,24 +719,17 @@ describe("startEngine 的业务就绪闸门（running 出口统一覆盖）", ()
       return cmd;
     });
     fsMocks.readTextFile.mockResolvedValue(SECRET_YAML);
-    const urls: string[] = [];
-    httpMocks.tauriFetch.mockImplementation(async (url: unknown) => {
-      const u = String(url);
-      urls.push(u);
-      if (u.includes("/api/session/list")) {
-        return {
-          ok: true,
-          json: () => Promise.resolve({ result: { ok: true, value: { items: [] } } }),
-        };
-      }
-      return { ok: true, text: () => Promise.resolve("__DSH_BOOT__") }; // probePort 根路径
-    });
+    coreMocks.invoke.mockResolvedValue({ status: 200, ok: true, body: "{}" });
+    httpMocks.tauriFetch.mockResolvedValue({ ok: true, text: () => Promise.resolve("__DSH_BOOT__") });
 
     const h = await startEngine(17800, true);
 
     expect(h.status).toBe("running");
     // 返回 running 之前，业务探针必须真的被调用过（否则闸门是装饰）
-    expect(urls.some((u) => u.includes("/api/session/list"))).toBe(true);
+    expect(coreMocks.invoke).toHaveBeenCalledWith(
+      "probe_engine_ready",
+      expect.objectContaining({ port: 17800 }),
+    );
   });
 
   it("业务探针一直 not-ready：预算用尽后仍返回 running（判据失效绝不得阻断启动）", async () => {
@@ -750,13 +743,9 @@ describe("startEngine 的业务就绪闸门（running 出口统一覆盖）", ()
         spawn: vi.fn(async () => ({ pid: 7, kill: vi.fn() })),
       }));
       fsMocks.readTextFile.mockResolvedValue(SECRET_YAML);
-      httpMocks.tauriFetch.mockImplementation(async (url: unknown) => {
-        const u = String(url);
-        if (u.includes("/api/session/list")) {
-          return { ok: false, status: 404, json: () => Promise.resolve("not found") };
-        }
-        return { ok: true, text: () => Promise.resolve("__DSH_BOOT__") };
-      });
+      // 探针持续 not-ready（模拟判据失效 / 业务长期未就绪）
+      coreMocks.invoke.mockResolvedValue({ status: 404, ok: false, body: "not found" });
+      httpMocks.tauriFetch.mockResolvedValue({ ok: true, text: () => Promise.resolve("__DSH_BOOT__") });
 
       const settled = startEngine(17800, true);
       // 业务预算 30s（400ms 轮询）；fetch mock 立即 settle，不需要推进 1500ms 超时
@@ -796,7 +785,7 @@ describe("startEngine 的业务就绪闸门（running 出口统一覆盖）", ()
     expect(h.status).toBe("running");
     // 业务探针根本没发出去（secret 都没有，发也是白发）
     expect(
-      httpMocks.tauriFetch.mock.calls.every((c: unknown[]) => !String(c[0]).includes("/api/session/list")),
+      coreMocks.invoke.mock.calls.every((c: unknown[]) => c[0] !== "probe_engine_ready"),
     ).toBe(true);
   });
 });

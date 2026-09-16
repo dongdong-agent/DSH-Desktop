@@ -13,6 +13,7 @@
 import { Command, type Child } from "@tauri-apps/plugin-shell";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import { exists, readDir, readTextFile, writeTextFile } from "@tauri-apps/plugin-fs";
+import { invoke } from "@tauri-apps/api/core";
 import { appDataDir, homeDir } from "@tauri-apps/api/path";
 import { compareVersions, kernelRootDir, normalizeDshVersion, runCommand } from "./updater";
 import { readCredentials } from "./credentials";
@@ -538,34 +539,45 @@ const BUSINESS_READY_BUDGET_MS = 30_000;
  * 响应 `result.ok === true` ⇒ 会话列表真实可读 ⇒ 业务就绪。endpoint 未认领时引擎回
  * 404 "not found"，HTTP 未就绪时是连接错误 / 401 —— 都判 not-ready。
  *
+ * 为什么经 Rust 侧发（勿改回前端 plugin-http 直发）：引擎 trust 层按 Origin 白名单
+ * （自身 authority）放行 /api，而 plugin-http 的请求 Origin 被固定为壳站点
+ * tauri.localhost → 一律 403，且显式设置 Origin 也会被插件覆盖（两轮实测坐实）。
+ * Rust 侧手写 HTTP（lib.rs probe_engine_ready）不带 Origin，实测可拿 ok:true。
+ *
  * 为什么不改 probePort 本身：它还被 findFreePort 当「端口是否空闲」用——把 401 从
  * 「占用」改成「未就绪」会把被占用的端口误判为空闲，直接造成双实例（本项目明令禁止）。
  */
-export async function probeEngineReady(port: number, timeoutMs = 1500): Promise<EngineBusinessReady> {
+export async function probeEngineReady(port: number): Promise<EngineBusinessReady> {
   try {
     const secret = await readBrowserSessionSecret();
-    if (!secret) return "unavailable";
+    if (!secret) {
+      diag("业务探针: 无会话签名密钥（unavailable）:", port);
+      return "unavailable";
+    }
     const auth = await buildEngineAuth(port, secret);
-    if (!auth) return "unavailable";
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    const res = await httpFetch(`http://127.0.0.1:${port}/api/session/list`, {
-      method: "POST",
-      headers: { Cookie: `${auth.name}=${auth.value}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        type: "client-request",
-        rpcId: "gui-ready-probe",
-        method: "session/list",
-        payload: { args: { _request: {} } },
-      }),
-      signal: controller.signal,
-      cache: "no-store",
+    if (!auth) {
+      diag("业务探针: Cookie 构造失败（unavailable）:", port);
+      return "unavailable";
+    }
+    const res = await invoke<{ status: number; ok: boolean; body: string }>("probe_engine_ready", {
+      port,
+      cookie: `${auth.name}=${auth.value}`,
     });
-    clearTimeout(timer);
-    if (!res.ok) return "not-ready";
-    const body = (await res.json().catch(() => null)) as { result?: { ok?: boolean } } | null;
-    return body?.result?.ok === true ? "ready" : "not-ready";
-  } catch {
+    if (res.status !== 200) {
+      diag(
+        "业务探针: HTTP 非 2xx:",
+        port,
+        "status=",
+        res.status,
+        "（401=鉴权未过 / 403=trust 拒 / 404=endpoint 未认领）",
+      );
+      return "not-ready";
+    }
+    if (res.ok) return "ready";
+    diag("业务探针: result.ok !== true:", port, "body=", res.body.slice(0, 200));
+    return "not-ready";
+  } catch (e) {
+    diag("业务探针: 请求异常（unreachable/超时/invoke 失败）:", port, String(e).slice(0, 150));
     return "not-ready";
   }
 }
@@ -576,15 +588,17 @@ export async function probeEngineReady(port: number, timeoutMs = 1500): Promise<
  * 安全性设计（吸取「修复比故障更糟」的教训）：
  * - 判据失败**绝不阻断启动**：not-ready 等满预算后照常放行（仅多等 BUSINESS_READY_BUDGET_MS）；
  * - `unavailable`（读不到签名密钥，如未装引擎凭据的新环境）**立即放行**，不白等预算；
- * - 三条 running 出口（复用已有实例 / 复用首选端口 / spawn 等待循环）统一走这里，
- *   冷启动故障链的每一入口都被覆盖。
+ * - 所有 running 出口统一走这里：startEngine 内的三条（复用已有实例 / 复用首选端口 /
+ *   spawn 等待循环）+ App 启动扫描的第四条（App.tsx 直接 findExistingInstance 后置
+ *   running——2026-09-16 真机安装后实测发现这条绕过了闸门，而它恰恰是「引擎已在跑、
+ *   客户端复用」时最常见的入口，冷启动故障链的主要通道）。
  */
-async function waitEngineBusinessReady(port: number): Promise<void> {
+export async function waitEngineBusinessReady(port: number): Promise<void> {
   const deadline = Date.now() + BUSINESS_READY_BUDGET_MS;
-  let state = await probeEngineReady(port, 1500);
+  let state = await probeEngineReady(port);
   while (state === "not-ready" && Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 400));
-    state = await probeEngineReady(port, 1500);
+    state = await probeEngineReady(port);
   }
   if (state === "unavailable") {
     diag("业务就绪探针不可用（无会话签名密钥），跳过等待，按端口就绪进入引擎页:", port);

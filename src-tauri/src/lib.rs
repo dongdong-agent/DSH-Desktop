@@ -153,6 +153,83 @@ fn quit_app(app: tauri::AppHandle) {
     app.exit(0);
 }
 
+/// 引擎业务就绪探针的响应（status=0 表示连接/读写失败）。
+#[derive(serde::Serialize)]
+struct EngineProbeResult {
+    status: u16,
+    /// 引擎 RPC envelope 的 result.ok（body 无法解析时为 false）
+    ok: bool,
+    /// 响应体（截断，供前端诊断日志）
+    body: String,
+}
+
+/// 引擎业务就绪探针（2026-09-16）：带自签会话 Cookie 调引擎 RPC `session/list`，
+/// 由前端（dshEngine.probeEngineReady）在「导航进引擎页」之前判定业务是否就绪。
+///
+/// 为什么在 Rust 侧发（勿回退成前端 plugin-http 直发）：
+/// 引擎的 trust 层按 Origin 白名单（自身 authority）放行 `/api` 请求，而壳页面 JS 经
+/// tauri-plugin-http 发请求时 Origin 被固定为壳站点 tauri.localhost → 引擎一律
+/// 403 forbidden；前端显式设置 Origin 头也会被插件覆盖（2026-09-16 两轮实测坐实）。
+/// Rust 侧手写的 HTTP 不带 Origin —— 与「无 Origin 的客户端」同形态，
+/// 实测可拿到 session/list 的 ok:true（会话索引就绪的直接证据）。
+///
+/// 手写 HTTP/1.1 而非引入 reqwest：单请求、无重定向、需精确控制头集合，
+/// std::net::TcpStream 足够且不增加依赖。
+#[tauri::command]
+async fn probe_engine_ready(port: u16, cookie: String) -> Result<EngineProbeResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        use std::io::{Read, Write};
+        use std::net::TcpStream;
+        use std::time::Duration;
+
+        let addr = format!("127.0.0.1:{port}");
+        let mut stream = TcpStream::connect(&addr).map_err(|e| format!("connect: {e}"))?;
+        stream
+            .set_read_timeout(Some(Duration::from_millis(1500)))
+            .map_err(|e| format!("read-timeout: {e}"))?;
+        stream
+            .set_write_timeout(Some(Duration::from_millis(1500)))
+            .map_err(|e| format!("write-timeout: {e}"))?;
+        // Connection RPC 信封（引擎 ClientRequest；payload 须恰好包一层 args）
+        let body = r#"{"type":"client-request","rpcId":"gui-ready-probe","method":"session/list","payload":{"args":{"_request":{}}}}"#;
+        // HTTP/1.0：引擎（hyper）对 1.1 请求会以 chunked 编码回包（body 混入块长度行，
+        // 前端 JSON.parse 必失败）；1.0 语义下回包带 Content-Length、无 chunk 标记。
+        let request = format!(
+            "POST /api/session/list HTTP/1.0\r\nHost: {addr}\r\nCookie: {cookie}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        stream
+            .write_all(request.as_bytes())
+            .map_err(|e| format!("write: {e}"))?;
+        let mut buf = Vec::new();
+        // Connection: close → 读到 EOF；对端未就绪时读超时也会把已收到的部分带回来
+        let _ = stream.read_to_end(&mut buf);
+        let text = String::from_utf8_lossy(&buf).to_string();
+        // 形如 "HTTP/1.0 200 OK" → 取第二段
+        let status = text
+            .split_whitespace()
+            .nth(1)
+            .and_then(|s| s.parse::<u16>().ok())
+            .unwrap_or(0);
+        // 注意不要截断：session/list 的响应可能超过数 KB，截断会让 serde 解析失败
+        // → ok 被误判为 false（2026-09-16 真机实测踩过）。诊断展示的截断由前端负责。
+        let body = text.split("\r\n\r\n").nth(1).unwrap_or("").to_string();
+        // result.ok 由 Rust 侧解析（前端不再做 JSON.parse，避免再踩响应形态差异）
+        let ok = serde_json::from_str::<serde_json::Value>(&body)
+            .ok()
+            .and_then(|v| {
+                v.get("result")
+                    .and_then(|r| r.get("ok"))
+                    .and_then(|o| o.as_bool())
+            })
+            .unwrap_or(false);
+        Ok(EngineProbeResult { status, ok, body })
+    })
+    .await
+    .map_err(|e| format!("join: {e}"))?
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -174,7 +251,8 @@ pub fn run() {
             close_devtools,
             open_engine_in_main,
             quit_app,
-            set_engine_port
+            set_engine_port,
+            probe_engine_ready
         ])
         .setup(|app| {
             // 系统托盘：最小化到托盘后可从这里恢复窗口 / 打开管理界面 / 退出

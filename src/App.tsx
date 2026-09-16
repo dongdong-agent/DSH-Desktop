@@ -9,7 +9,7 @@ import { StatusBar } from "./components/StatusBar";
 import { EngineLauncher } from "./components/EngineLauncher";
 import { CloseDialog } from "./components/CloseDialog";
 import { KeyManagerDialog } from "./components/KeyManagerDialog";
-import { findExistingInstance, onEngineHealth, stopEngine, loadVerifiedVersions, restartEngineOnPort, getEnginePort } from "./lib/dshEngine";
+import { findExistingInstance, waitEngineBusinessReady, onEngineHealth, stopEngine, loadVerifiedVersions, restartEngineOnPort, getEnginePort } from "./lib/dshEngine";
 import { buildEngineAuth, readBrowserSessionSecret } from "./lib/engineAuth";
 import { useZoomShortcuts } from "./hooks/useZoomShortcuts";
 
@@ -179,6 +179,10 @@ export default function App() {
     void (async () => {
       const port = await findExistingInstance();
       if (port !== null) {
+        // 端口就绪 ≠ 业务就绪：这条路径绕过 startEngine，而「引擎已在跑、客户端复用」
+        // 恰是冷启动故障链（过早导航 → 网页端清空 dsh.sessions.current）的主入口，
+        // 必须与 startEngine 的三条出口一样过业务就绪闸门（unavailable/超时自动放行）。
+        await waitEngineBusinessReady(port);
         setHealth({ status: "running", port, url: `http://127.0.0.1:${port}` });
       }
     })();
