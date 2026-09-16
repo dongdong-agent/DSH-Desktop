@@ -50,6 +50,7 @@ import {
   loadVerifiedVersions,
   addVerifiedVersion,
   restartEngine,
+  restartEngineOnPort,
   startEngine,
   clearStaleProfileLocks,
   managedCredentialEnv,
@@ -253,6 +254,68 @@ describe("restartEngine 强杀外部实例", () => {
       (c: unknown[]) => c[0] === "node" && Array.isArray(c[1]) && String((c[1] as string[])[0]).includes("kernel"),
     )?.[1] as string[];
     expect(nodeArgs?.[0]).toContain("kernel\\0.1.1-rc.2\\node_modules");
+  });
+});
+
+// ---------- 托盘重启（按指定端口） ----------
+
+describe("restartEngineOnPort 必须按传入端口重启（托盘「重启引擎」入口）", () => {
+  it("先接管 currentPort 再强杀该端口 —— 否则会在 17800 另起实例（双实例）", async () => {
+    // 内核目录命中，spawn 成功
+    fsMocks.exists.mockImplementation((p: string) => Promise.resolve(String(p).includes("kernel")));
+    fsMocks.readDir.mockImplementation((p: string) =>
+      Promise.resolve(
+        String(p).includes("kernel") ? [{ name: "0.1.1-rc.2", isDirectory: true }] : [],
+      ),
+    );
+    // netstat 显示 **3080** 被外部 PID 1234 占用（模拟复用了用户网页版实例）
+    shellMocks.create.mockImplementation((prog: string) => {
+      if (prog === "netstat") {
+        return {
+          execute: vi.fn().mockResolvedValue({
+            code: 0,
+            stdout: "  TCP    127.0.0.1:3080    0.0.0.0:0    LISTENING    1234\r\n",
+            stderr: "",
+          }),
+        };
+      }
+      if (prog === "taskkill") {
+        return { execute: vi.fn().mockResolvedValue({ code: 0, stdout: "SUCCESS", stderr: "" }) };
+      }
+      const cmd = {
+        stdout: { on: vi.fn() },
+        stderr: { on: vi.fn() },
+        on: vi.fn(),
+        spawn: vi.fn(async () => {
+          cmd.stdout.on.mock.calls
+            .filter(([e]: string[]) => e === "data")
+            .forEach(([, cb]) => cb("0.1.1-rc.2\n"));
+          cmd.on.mock.calls.find(([e]: string[]) => e === "close")?.[1]?.({ code: 0, signal: null });
+          return { pid: 99, kill: vi.fn() };
+        }),
+      };
+      return cmd;
+    });
+    let fetchCount = 0;
+    httpMocks.tauriFetch.mockImplementation(() => {
+      fetchCount++;
+      if (fetchCount === 1) return Promise.reject(new Error("端口未就绪"));
+      return Promise.resolve({ ok: true, text: () => Promise.resolve("__DSH_BOOT__") });
+    });
+
+    await restartEngineOnPort(3080);
+
+    // 1. 强杀的是 3080 的占用者（netstat 确实查了该端口）
+    const netstatArgs = shellMocks.create.mock.calls.find(([p]: string[]) => p === "netstat")?.[1];
+    expect(netstatArgs).toEqual(["-ano"]);
+    expect(shellMocks.create.mock.calls.some(([p]: string[]) => p === "taskkill")).toBe(true);
+    // 2. 新实例起在 3080，而不是模块默认端口 17800
+    const nodeArgs = shellMocks.create.mock.calls.find(
+      (c: unknown[]) => c[0] === "node" && Array.isArray(c[1]) && String((c[1] as string[])[0]).includes("kernel"),
+    )?.[1] as string[];
+    expect(nodeArgs).toBeDefined();
+    expect(nodeArgs.join(" ")).toContain("--port 3080");
+    expect(nodeArgs.join(" ")).not.toContain("--port 17800");
   });
 });
 

@@ -795,6 +795,21 @@ export async function restartEngine(preferredPort = DEFAULT_PORT): Promise<Engin
   return startEngine(targetPort, true);
 }
 
+/**
+ * 按**指定端口**重启引擎（托盘「重启引擎」专用入口）。
+ *
+ * 为什么不能直接调 `restartEngine(port)`：它的目标端口取自 `currentPort || preferredPort`，
+ * 而壳被托盘导航回来时是**冷加载**，`currentPort` 还是模块默认值 17800；
+ * 若引擎实际跑在别的端口（例如复用了用户网页版正在跑的 3080），
+ * 那个默认值会赢过入参 —— 结果是旧实例没被杀掉、又在 17800 新起一个，变成双实例
+ * （双实例会争抢 `~/.dsh` 会话存储，是本项目明令禁止的状态）。
+ * 这里先把端口接管为**事实端口**，再走既有重启链路：清残留写锁 → 强杀端口占用者 → force 启动。
+ */
+export async function restartEngineOnPort(port: number): Promise<EngineHealth> {
+  currentPort = port;
+  return restartEngine(port);
+}
+
 /** 当前端口 */
 export function getEnginePort(): number {
   return currentPort;

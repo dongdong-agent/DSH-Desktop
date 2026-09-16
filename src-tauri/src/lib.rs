@@ -12,13 +12,25 @@ use tauri::{
 /// 壳的 JS 上下文随之被替换——托盘事件再也回不到前端。因此杀引擎的动作
 /// 必须放在 Rust 侧，前端只负责在健康状态变化时把端口登记进来。
 #[derive(Default)]
-struct EnginePort(Mutex<Option<u16>>);
+struct EnginePort {
+    /// 引擎**此刻**是否在跑（None = 未运行）；托盘「完全退出」据此判断要不要强杀
+    current: Mutex<Option<u16>>,
+    /// 最近一次已知端口：只在 Some 时更新、**永不因 None 清空**。
+    /// 托盘「重启引擎」需要它——重启期间前端会先把端口置 null，
+    /// 此时若只看到 None 就只能退回默认端口 17800，会在旧端口实例之外另起一个（双实例）。
+    last: Mutex<Option<u16>>,
+}
 
 /// 前端登记 / 清除当前引擎端口（None = 引擎未运行，避免误杀后续占用该端口的进程）。
 #[tauri::command]
 fn set_engine_port(port: Option<u16>, state: tauri::State<'_, EnginePort>) {
-    if let Ok(mut p) = state.0.lock() {
+    if let Ok(mut p) = state.current.lock() {
         *p = port;
+    }
+    if let Some(port) = port {
+        if let Ok(mut l) = state.last.lock() {
+            *l = Some(port);
+        }
     }
 }
 
@@ -60,7 +72,8 @@ fn kill_port_owner(_port: u16) {}
 /// 托盘「完全退出」：先按登记的端口强杀引擎进程（含子进程），再退出 GUI。
 /// 纯 Rust 实现，不依赖前端 JS，因此导航到引擎页后依然有效。
 fn quit_all(app: &tauri::AppHandle) {
-    let port = app.state::<EnginePort>().0.lock().ok().and_then(|p| *p);
+    // 只认「此刻在跑」的端口：引擎未运行时不动手，避免误杀后续占用同一端口的其他进程。
+    let port = app.state::<EnginePort>().current.lock().ok().and_then(|p| *p);
     if let Some(port) = port {
         kill_port_owner(port);
     }
@@ -159,10 +172,17 @@ pub fn run() {
                 true,
                 None::<&str>,
             )?;
+            // 重启引擎：引擎进程只在**启动时**读一次环境变量与配置（改 Key / 换内核后必须重启才生效）；
+            // 引擎运行中窗口显示的是引擎页、壳自己的重启入口不可见，故在这条唯一常驻通道上提供。
+            let restart_engine =
+                MenuItem::with_id(app, "restart-engine", "重启引擎", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "退出（不影响后台引擎）", true, None::<&str>)?;
             let quit_all_item =
                 MenuItem::with_id(app, "quit-all", "完全退出（同时关闭引擎）", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show, &manage, &quit, &quit_all_item])?;
+            let menu = Menu::with_items(
+                app,
+                &[&show, &manage, &restart_engine, &quit, &quit_all_item],
+            )?;
 
             TrayIconBuilder::with_id("main-tray")
                 .icon(app.default_window_icon().unwrap().clone())
@@ -190,6 +210,37 @@ pub fn run() {
                                 "http://tauri.localhost/?manage=1"
                             };
                             if let Ok(u) = tauri::Url::parse(base) {
+                                let _ = w.navigate(u);
+                            }
+                        }
+                    }
+                    // 重启引擎：导航回壳并带 `?restart=1&port=<当前端口>` 标记，由前端执行真正的重启。
+                    //
+                    // 为什么不在 Rust 侧直接杀端口 + 重启：引擎重启是一整条链路
+                    // （清 `~/.dsh/profiles` 残留写锁 → 注入受管凭据 → 写覆盖层 → 候选命令回退），
+                    // 这些能力只存在于前端 src/lib/dshEngine.ts；Rust 侧只能杀进程，杀完没有能力把它拉起来。
+                    // 而引擎就绪后主窗口是**顶层导航**到引擎页的，壳的 JS 已不再运行，
+                    // 托盘是该场景下唯一常驻入口 —— 所以这里只负责「把控制权交回壳」。
+                    // 端口一并带上：前端冷加载后 currentPort 是默认值，
+                    // 不带端口会在 17800 上另起一个实例（原端口实例被丢弃，等于换端口重启）。
+                    // 取 last 而非 current：重启期间前端已把 current 置 null，
+                    // 只有 last 记得住「该重启哪个端口」。
+                    "restart-engine" => {
+                        if let Some(w) = app.get_webview_window("main") {
+                            let _ = w.show();
+                            let _ = w.set_focus();
+                            let port = app.state::<EnginePort>().last.lock().ok().and_then(|p| *p);
+                            let query = match port {
+                                Some(p) => format!("restart=1&port={p}"),
+                                None => "restart=1".to_string(),
+                            };
+                            // dev 模式壳来自 vite dev server，生产才是 tauri.localhost
+                            let base = if cfg!(debug_assertions) {
+                                format!("http://localhost:1422/?{query}")
+                            } else {
+                                format!("http://tauri.localhost/?{query}")
+                            };
+                            if let Ok(u) = tauri::Url::parse(&base) {
                                 let _ = w.navigate(u);
                             }
                         }

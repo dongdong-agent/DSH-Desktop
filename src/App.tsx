@@ -9,7 +9,7 @@ import { StatusBar } from "./components/StatusBar";
 import { EngineLauncher } from "./components/EngineLauncher";
 import { CloseDialog } from "./components/CloseDialog";
 import { KeyManagerDialog } from "./components/KeyManagerDialog";
-import { findExistingInstance, onEngineHealth, stopEngine, loadVerifiedVersions } from "./lib/dshEngine";
+import { findExistingInstance, onEngineHealth, stopEngine, loadVerifiedVersions, restartEngineOnPort, getEnginePort } from "./lib/dshEngine";
 import { buildEngineAuth, readBrowserSessionSecret } from "./lib/engineAuth";
 import { useZoomShortcuts } from "./hooks/useZoomShortcuts";
 
@@ -29,10 +29,41 @@ export default function App() {
   const appWindow = getCurrentWindow();
   /** 管理模式：从托盘「打开管理界面」进入（URL 带 ?manage=1）。
    *  引擎运行中窗口会自动跳转引擎页，壳的升级/密钥/状态栏入口不可见；
-   *  管理模式暂停该跳转，方便使用升级 / 回滚 / 清理 / 密钥等功能。 */
-  const [manageMode, setManageMode] = useState(() =>
-    new URLSearchParams(window.location.search).has("manage"),
+   *  管理模式暂停该跳转，方便使用升级 / 回滚 / 清理 / 密钥等功能。
+   *  托盘「重启引擎」（?restart=1）语义相同 —— 重启期间引擎会短暂变 starting，
+   *  不暂停跳转的话窗口会在端口就绪前被抢走、重启反馈看不见 —— 故一并计入，
+   *  这样首帧就是管理模式，不会先闪一下启动页。 */
+  const [manageMode, setManageMode] = useState(() => {
+    const sp = new URLSearchParams(window.location.search);
+    return sp.has("manage") || sp.has("restart");
+  });
+
+  // 托盘「重启引擎」：引擎运行中时窗口显示的是引擎页、壳自己的重启入口不可见，
+  // 所以由 Rust 侧导航回壳并带 `?restart=1&port=<端口>` 标记，这里执行真正的重启。
+  // 标记必须在挂载时**读一次就清掉**：留着的话用户之后手动刷新页面（引擎刚起来、
+  // 壳里已无重启意图）会平白再重启一次引擎。
+  const pendingRestartRef = useRef<number | null>(null);
+  const restartIntent = useRef(
+    (() => {
+      const sp = new URLSearchParams(window.location.search);
+      if (!sp.has("restart")) return null;
+      const p = Number(sp.get("port"));
+      return Number.isInteger(p) && p > 0 && p <= 65535 ? p : 0;
+    })(),
   );
+  /** 托盘重启进行中的提示（重启链路可能耗时较久：首次 heals profiles 可达数分钟） */
+  const [trayRestarting, setTrayRestarting] = useState(restartIntent.current !== null);
+
+  // 标记读进内存后立刻从 URL 抹掉（replace，不留历史记录）。
+  // manageMode 上面已按同一标记初始化，故这里只负责清地址栏。
+  useEffect(() => {
+    if (restartIntent.current === null) return;
+    try {
+      window.history.replaceState(null, "", window.location.pathname);
+    } catch {
+      /* ignore */
+    }
+  }, []);
 
   // ── 沉浸模式：隐藏桌面壳的标题栏/状态栏，让内嵌 WebUI 占满窗口 ──
   const [immersive, setImmersive] = useState<boolean>(() => {
@@ -164,6 +195,27 @@ export default function App() {
     }).catch(() => {});
   }, [health.status, health.port]);
 
+  // 托盘「重启引擎」的真正执行处（只在挂载后跑一次）。
+  // 端口优先用 Rust 侧带过来的（那是引擎的事实端口）；标记里没有有效端口时退回 getEnginePort()。
+  // pendingRestartRef 是幂等闸门：StrictMode 下 effect 会成对执行两次，没有它就会连重启两轮。
+  useEffect(() => {
+    const intent = restartIntent.current;
+    if (intent === null || pendingRestartRef.current !== null) return;
+    const target = intent > 0 ? intent : getEnginePort();
+    pendingRestartRef.current = target;
+    void (async () => {
+      try {
+        await restartEngineOnPort(target);
+        // 成功：交回自动跳转（此时端口已就绪，导航 effect 会把窗口带回引擎页）
+        setManageMode(false);
+      } catch {
+        /* 失败状态已通过 health 广播；停在管理模式即可看到错误并重试 */
+      } finally {
+        setTrayRestarting(false);
+      }
+    })();
+  }, []);
+
   const running = health.status === "running";
   const engineUrl = health.url || `http://127.0.0.1:${health.port}`;
   // 沉浸模式下两条栏收起；鼠标贴到窗口边缘（peek）时临时展开
@@ -263,7 +315,18 @@ export default function App() {
         />
       </div>
       {manageMode ? (
-        running ? (
+        trayRestarting ? (
+          <div className="flex flex-1 flex-col items-center justify-center gap-3">
+            <div className="flex items-center gap-2 text-sm text-gray-200">
+              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-amber-400" />
+              正在重启引擎…
+            </div>
+            <div className="max-w-md text-center text-[11px] leading-5 text-gray-600">
+              正在关闭旧进程并按原端口重新启动；旧实例上正在运行的 agent 任务会被中断。
+              首次启动或内核刚更新时可能需要数分钟，请稍候，完成后会自动回到引擎界面。
+            </div>
+          </div>
+        ) : running ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-3">
             <div className="text-sm text-gray-200">管理模式：标题栏「升级内核」、状态栏「回滚 / 清理 / 密钥」均可用</div>
             <button
