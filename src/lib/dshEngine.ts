@@ -17,6 +17,7 @@ import { appDataDir, homeDir } from "@tauri-apps/api/path";
 import { compareVersions, kernelRootDir, normalizeDshVersion, runCommand } from "./updater";
 import { readCredentials } from "./credentials";
 import { ensureEnginePatchFile } from "./enginePatch";
+import { buildEngineAuth, readBrowserSessionSecret } from "./engineAuth";
 import type { EngineHealth } from "./types";
 
 /** 诊断日志（落盘系统临时目录 dsh-spawn.log；WebView console 不输出到终端，靠文件看错误） */
@@ -505,6 +506,97 @@ export async function findExistingInstance(): Promise<number | null> {
   return results.find((p) => p !== null) ?? null;
 }
 
+/**
+ * 业务就绪探针结果：
+ * - `ready`：会话索引可查询（引擎业务已加载）
+ * - `not-ready`：端口在应答，但业务查询未成功（未就绪 / 判据随引擎版本失效）
+ * - `unavailable`：无法探测（无会话签名密钥等）——调用方应跳过等待，不能让它白等预算
+ */
+export type EngineBusinessReady = "ready" | "not-ready" | "unavailable";
+
+/**
+ * 业务就绪等待预算。
+ *
+ * 只影响「HTTP 已就绪之后、会话索引加载完成之前」的窗口（实测远小于 1s 量级；
+ * 首次 heal profiles 的漫长时间由 MAX_START_WAIT_MS 覆盖，在 probePort 之前）。
+ * 判据失效时（引擎升级改了 RPC 契约）最坏后果是多等这一个预算，绝不会让启动失败
+ * ——超时后照常进入引擎页，等于回退旧「端口就绪即导航」的行为。
+ */
+const BUSINESS_READY_BUDGET_MS = 30_000;
+
+/**
+ * 探测引擎【业务】是否就绪（会话索引可查询）。
+ *
+ * 为什么 probePort 不够：引擎 ≥0.1.5 起，端口开始应答 401 就被当「就绪」，但那只是
+ * HTTP 层在监听。2026-09-16 排查坐实（高置信推断）的冷启动故障链：
+ *   HTTP 就绪但会话索引未加载 → GUI 导航 → 网页端查「上次打开的会话」失败 →
+ *   网页端把 dsh.sessions.current 判为无效并清空落盘 → 恢复能力被永久丢弃（刷新也救不回）。
+ * 这解释了「重启后首次不行、完全退出再启动就行（引擎热了）、刷新无效」三个现象。
+ *
+ * 判据（2026-09-16 对 0.1.5-rc.1 实测校准）：带自签会话 Cookie 调引擎 RPC 网关
+ * `POST /api/session/list`（Connection RPC 信封，payload 须包一层 {args:{_request:{}}}），
+ * 响应 `result.ok === true` ⇒ 会话列表真实可读 ⇒ 业务就绪。endpoint 未认领时引擎回
+ * 404 "not found"，HTTP 未就绪时是连接错误 / 401 —— 都判 not-ready。
+ *
+ * 为什么不改 probePort 本身：它还被 findFreePort 当「端口是否空闲」用——把 401 从
+ * 「占用」改成「未就绪」会把被占用的端口误判为空闲，直接造成双实例（本项目明令禁止）。
+ */
+export async function probeEngineReady(port: number, timeoutMs = 1500): Promise<EngineBusinessReady> {
+  try {
+    const secret = await readBrowserSessionSecret();
+    if (!secret) return "unavailable";
+    const auth = await buildEngineAuth(port, secret);
+    if (!auth) return "unavailable";
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const res = await httpFetch(`http://127.0.0.1:${port}/api/session/list`, {
+      method: "POST",
+      headers: { Cookie: `${auth.name}=${auth.value}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        type: "client-request",
+        rpcId: "gui-ready-probe",
+        method: "session/list",
+        payload: { args: { _request: {} } },
+      }),
+      signal: controller.signal,
+      cache: "no-store",
+    });
+    clearTimeout(timer);
+    if (!res.ok) return "not-ready";
+    const body = (await res.json().catch(() => null)) as { result?: { ok?: boolean } } | null;
+    return body?.result?.ok === true ? "ready" : "not-ready";
+  } catch {
+    return "not-ready";
+  }
+}
+
+/**
+ * 在「返回 running / 导航进引擎页」之前等业务就绪。
+ *
+ * 安全性设计（吸取「修复比故障更糟」的教训）：
+ * - 判据失败**绝不阻断启动**：not-ready 等满预算后照常放行（仅多等 BUSINESS_READY_BUDGET_MS）；
+ * - `unavailable`（读不到签名密钥，如未装引擎凭据的新环境）**立即放行**，不白等预算；
+ * - 三条 running 出口（复用已有实例 / 复用首选端口 / spawn 等待循环）统一走这里，
+ *   冷启动故障链的每一入口都被覆盖。
+ */
+async function waitEngineBusinessReady(port: number): Promise<void> {
+  const deadline = Date.now() + BUSINESS_READY_BUDGET_MS;
+  let state = await probeEngineReady(port, 1500);
+  while (state === "not-ready" && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 400));
+    state = await probeEngineReady(port, 1500);
+  }
+  if (state === "unavailable") {
+    diag("业务就绪探针不可用（无会话签名密钥），跳过等待，按端口就绪进入引擎页:", port);
+    return;
+  }
+  if (state !== "ready") {
+    diag(`业务就绪探针未通过（${Math.round(BUSINESS_READY_BUDGET_MS / 1000)}s 预算用尽），照常进入引擎页:`, port);
+    return;
+  }
+  diag("引擎业务就绪（会话列表可查）:", port);
+}
+
 /** 找一个空闲端口 */
 export async function findFreePort(start: number): Promise<number> {
   for (let p = start; p < start + 50; p++) {
@@ -603,6 +695,9 @@ export async function startEngine(preferredPort = DEFAULT_PORT, force = false): 
     const existing = await findExistingInstance();
     if (existing !== null) {
       currentPort = existing;
+      // 端口就绪 ≠ 业务就绪：被复用的实例同样可能是刚冷启动的（如开机后被其它途径先拉起），
+      // 过早导航会触发「会话指针被清空」的冷启动故障链（见 waitEngineBusinessReady 注释）。
+      await waitEngineBusinessReady(currentPort);
       const h: EngineHealth = { status: "running", port: currentPort, url: `http://127.0.0.1:${currentPort}` };
       emit(h);
       return h;
@@ -611,6 +706,7 @@ export async function startEngine(preferredPort = DEFAULT_PORT, force = false): 
     // 2. 指定端口已有则复用（用户可能刚好用了默认端口）
     if (await probePort(preferredPort, 800)) {
       currentPort = preferredPort;
+      await waitEngineBusinessReady(currentPort);
       const h: EngineHealth = { status: "running", port: currentPort, url: `http://127.0.0.1:${currentPort}` };
       emit(h);
       return h;
@@ -681,6 +777,8 @@ export async function startEngine(preferredPort = DEFAULT_PORT, force = false): 
       const deadline = Date.now() + MAX_START_WAIT_MS;
       while (Date.now() < deadline) {
         if (await probePort(port, 600)) {
+          // 端口已应答：这里恰恰是旧实现「提前导航」的故障点——业务（会话索引）往往还差最后一截
+          await waitEngineBusinessReady(port);
           const h: EngineHealth = { status: "running", port, url: `http://127.0.0.1:${port}` };
           emit(h);
           return h;

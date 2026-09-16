@@ -55,6 +55,7 @@ import {
   clearStaleProfileLocks,
   managedCredentialEnv,
   buildEngineArgs,
+  probeEngineReady,
 } from "./dshEngine";
 
 const APP_DATA = "C:\\Users\\demo\\AppData\\Roaming\\com.dsh.desktop\\";
@@ -612,5 +613,190 @@ describe("残留写锁自愈（stale writer lock）", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+// ---------- 业务就绪探针（2026-09-16 冷启动丢会话指针的根治） ----------
+
+/**
+ * 复刻冷启动故障链：引擎 HTTP 层就绪（probePort 命中）但会话索引未加载 → GUI 导航 →
+ * 网页端查「上次打开的会话」失败 → dsh.sessions.current 被清空落盘 → 恢复能力永久丢失。
+ * 修复 = running 出口统一先过业务就绪探针（带自签 Cookie 调 session/list RPC）。
+ */
+describe("probeEngineReady（业务就绪探针）", () => {
+  /** 32 字节密钥的 base64url（43 字符）；engineAuth 要求恰好解码出 32 字节 */
+  const SECRET_YAML = [
+    "version: 1",
+    "refs:",
+    "  client-connection/browser-session:",
+    `    secret: ${"A".repeat(43)}`,
+    "",
+  ].join("\n");
+
+  it("session/list RPC 返回 ok:true ⇒ ready，且请求带自签 Cookie 与正确的 Connection RPC 信封", async () => {
+    fsMocks.readTextFile.mockResolvedValue(SECRET_YAML);
+    httpMocks.tauriFetch.mockResolvedValue({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          type: "server-response",
+          rpcId: "gui-ready-probe",
+          result: { ok: true, value: { items: [] } },
+        }),
+    });
+
+    const state = await probeEngineReady(17800);
+
+    expect(state).toBe("ready");
+    // 判据必须打在真实业务端点上（URL + 信封 + args 形状都对，缺一不可）
+    expect(String(httpMocks.tauriFetch.mock.calls[0][0])).toBe("http://127.0.0.1:17800/api/session/list");
+    const init = httpMocks.tauriFetch.mock.calls[0][1] as RequestInit;
+    const headers = init.headers as Record<string, string>;
+    expect(headers.Cookie).toMatch(/^dsh-auth-.+=v1\./);
+    const body = JSON.parse(String(init.body));
+    expect(body).toMatchObject({
+      type: "client-request",
+      method: "session/list",
+      payload: { args: { _request: {} } },
+    });
+  });
+
+  it("读不到会话签名密钥 ⇒ unavailable（调用方立即放行，不得让无凭据环境白等预算）", async () => {
+    fsMocks.readTextFile.mockRejectedValue(new Error("文件不存在"));
+    expect(await probeEngineReady(17800)).toBe("unavailable");
+    expect(httpMocks.tauriFetch).not.toHaveBeenCalled();
+  });
+
+  it("HTTP 401（端口在但鉴权未过）⇒ not-ready，不是 ready", async () => {
+    fsMocks.readTextFile.mockResolvedValue(SECRET_YAML);
+    httpMocks.tauriFetch.mockResolvedValue({ ok: false, status: 401, json: () => Promise.resolve({}) });
+    expect(await probeEngineReady(17800)).toBe("not-ready");
+  });
+
+  it("HTTP 200 但 result.ok:false（endpoint 未认领 / 判据失效）⇒ not-ready", async () => {
+    fsMocks.readTextFile.mockResolvedValue(SECRET_YAML);
+    httpMocks.tauriFetch.mockResolvedValue({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          type: "server-response",
+          rpcId: "x",
+          result: { ok: false, error: { code: "gateway/internal", message: "x", details: {} } },
+        }),
+    });
+    expect(await probeEngineReady(17800)).toBe("not-ready");
+  });
+});
+
+describe("startEngine 的业务就绪闸门（running 出口统一覆盖）", () => {
+  const SECRET_YAML = [
+    "version: 1",
+    "refs:",
+    "  client-connection/browser-session:",
+    `    secret: ${"A".repeat(43)}`,
+    "",
+  ].join("\n");
+
+  it("端口就绪后必须等业务就绪才返回 running（回归：端口就绪即导航会丢会话恢复指针）", async () => {
+    stubKernelDir(["0.1.1-rc.2"]);
+    shellMocks.create.mockImplementation((prog: string, args: unknown) => {
+      // 清锁脚本（node -e）必须正常退出并输出，否则 runCommand 挂满 10s 等待；引擎候选保持存活
+      const isLockScript = prog === "node" && Array.isArray(args) && args[0] === "-e";
+      const cmd = {
+        stdout: { on: vi.fn() },
+        stderr: { on: vi.fn() },
+        on: vi.fn(),
+        spawn: vi.fn(async () => {
+          if (isLockScript) {
+            cmd.stdout.on.mock.calls
+              .filter((c: unknown[]) => c[0] === "data")
+              .forEach((c: unknown[]) => (c[1] as (d: string) => void)?.('{"checked":0,"removed":[],"alive":[],"skipped":[]}\n'));
+            cmd.on.mock.calls.find((c: unknown[]) => c[0] === "close")?.[1]?.({ code: 0, signal: null });
+          }
+          return { pid: 7, kill: vi.fn() };
+        }),
+      };
+      return cmd;
+    });
+    fsMocks.readTextFile.mockResolvedValue(SECRET_YAML);
+    const urls: string[] = [];
+    httpMocks.tauriFetch.mockImplementation(async (url: unknown) => {
+      const u = String(url);
+      urls.push(u);
+      if (u.includes("/api/session/list")) {
+        return {
+          ok: true,
+          json: () => Promise.resolve({ result: { ok: true, value: { items: [] } } }),
+        };
+      }
+      return { ok: true, text: () => Promise.resolve("__DSH_BOOT__") }; // probePort 根路径
+    });
+
+    const h = await startEngine(17800, true);
+
+    expect(h.status).toBe("running");
+    // 返回 running 之前，业务探针必须真的被调用过（否则闸门是装饰）
+    expect(urls.some((u) => u.includes("/api/session/list"))).toBe(true);
+  });
+
+  it("业务探针一直 not-ready：预算用尽后仍返回 running（判据失效绝不得阻断启动）", async () => {
+    vi.useFakeTimers();
+    try {
+      stubKernelDir(["0.1.1-rc.2"]);
+      shellMocks.create.mockImplementation(() => ({
+        stdout: { on: vi.fn() },
+        stderr: { on: vi.fn() },
+        on: vi.fn(),
+        spawn: vi.fn(async () => ({ pid: 7, kill: vi.fn() })),
+      }));
+      fsMocks.readTextFile.mockResolvedValue(SECRET_YAML);
+      httpMocks.tauriFetch.mockImplementation(async (url: unknown) => {
+        const u = String(url);
+        if (u.includes("/api/session/list")) {
+          return { ok: false, status: 404, json: () => Promise.resolve("not found") };
+        }
+        return { ok: true, text: () => Promise.resolve("__DSH_BOOT__") };
+      });
+
+      const settled = startEngine(17800, true);
+      // 业务预算 30s（400ms 轮询）；fetch mock 立即 settle，不需要推进 1500ms 超时
+      await vi.advanceTimersByTimeAsync(40_000);
+      const h = await settled;
+      expect(h.status).toBe("running");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("读不到签名密钥（unavailable）：不等待预算，立即按端口就绪返回 running", async () => {
+    stubKernelDir(["0.1.1-rc.2"]);
+    shellMocks.create.mockImplementation((prog: string, args: unknown) => {
+      const isLockScript = prog === "node" && Array.isArray(args) && args[0] === "-e";
+      const cmd = {
+        stdout: { on: vi.fn() },
+        stderr: { on: vi.fn() },
+        on: vi.fn(),
+        spawn: vi.fn(async () => {
+          if (isLockScript) {
+            cmd.stdout.on.mock.calls
+              .filter((c: unknown[]) => c[0] === "data")
+              .forEach((c: unknown[]) => (c[1] as (d: string) => void)?.('{"checked":0,"removed":[],"alive":[],"skipped":[]}\n'));
+            cmd.on.mock.calls.find((c: unknown[]) => c[0] === "close")?.[1]?.({ code: 0, signal: null });
+          }
+          return { pid: 7, kill: vi.fn() };
+        }),
+      };
+      return cmd;
+    });
+    // beforeEach 已把 readTextFile mock 成 reject（无凭据文件）
+    httpMocks.tauriFetch.mockResolvedValue({ ok: true, text: () => Promise.resolve("__DSH_BOOT__") });
+
+    const h = await startEngine(17800, true);
+
+    expect(h.status).toBe("running");
+    // 业务探针根本没发出去（secret 都没有，发也是白发）
+    expect(
+      httpMocks.tauriFetch.mock.calls.every((c: unknown[]) => !String(c[0]).includes("/api/session/list")),
+    ).toBe(true);
   });
 });
