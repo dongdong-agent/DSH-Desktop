@@ -115,8 +115,18 @@ async fn open_engine_in_main(
     window.navigate(target).map_err(|e| e.to_string())?;
 
     // 等待导航落地：url 的 host 变成 127.0.0.1 即视为已进入引擎页（含 401 文本页）。
+    //
+    // 2026-09-16 修复（勿回退成 `let _ = landed;` + 无条件 eval）：
+    // 旧实现丢弃了落地结果却**照样执行 `window.eval(auth_js)`**。`document.cookie` 只能写
+    // **当前文档域**的 Cookie —— 冷启动导航慢（重启电脑后首次启动正是如此）时，脚本会作用在
+    // 壳页面 `tauri.localhost` 上，把自签会话 Cookie 写到错误的域；而 auth_js 的幂等判据是
+    // `document.cookie.indexOf(name)`，在壳页面上「已存在」于是不再重试 —— 结果引擎页永远 401，
+    // 且此后刷新/重启都不会自愈。现在：**只有确认落到 127.0.0.1 才注入**；等到截止仍未落地
+    // 就返回 Err（前端会把失败原因落盘到 %TEMP%\dsh-engine-view.log），把"静默永久 401"
+    // 变成"一次可诊断的失败"。
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
     let mut landed = false;
-    for _ in 0..50 {
+    while std::time::Instant::now() < deadline {
         std::thread::sleep(std::time::Duration::from_millis(100));
         if let Ok(cur) = window.url() {
             if cur.host_str() == Some("127.0.0.1") {
@@ -125,7 +135,11 @@ async fn open_engine_in_main(
             }
         }
     }
-    let _ = landed;
+    if !landed {
+        return Err(
+            "engine page did not land on 127.0.0.1 within 20s; skipped auth injection to avoid writing the session cookie to the shell origin".into(),
+        );
+    }
     // 再留一点渲染时间；脚本幂等，执行偏早/偏晚都安全。
     std::thread::sleep(std::time::Duration::from_millis(400));
     window.eval(auth_js).map_err(|e| e.to_string())

@@ -118,8 +118,14 @@ export async function buildEngineAuth(port: number, secretB64Url: string): Promi
     const value = `v1.${body}.${b64urlEncode(new Uint8Array(signature))}`;
 
     const rootUrl = `http://${authority}/`;
-    // 幂等：本地已有该 Cookie 就不动作；没有则写入并重新加载根路径。
-    // Cookie 过期后 document.cookie 读不到，会自动重新签发。
+    // 幂等：已经有该 Cookie 且页面已不是 401 文案时不动；否则写入 Cookie 并重新加载根路径。
+    //
+    // 2026-09-16 修复：旧判据只看「Cookie 是否存在」。若 Cookie 存在但**已失效**
+    // （签名密钥轮换 / Cookie 被写到了别的域 / 手动清过引擎数据），脚本就会认定
+    // 「无需动作」而不再重试 —— 页面被永久钉在 401 文本页，刷新与重启都不会自愈。
+    // 引擎的 401 正文是 "dsh web authentication required"，据此补一条判据：
+    // **只要落地页仍是 401 文案，就无条件重设 Cookie 并重载**（脚本本身幂等，重复执行安全）。
+    // document.body 在极早执行时可能为 null，故取文本前做空值保护。
     const js =
       "(function(){try{var n=" +
       JSON.stringify(name) +
@@ -127,7 +133,10 @@ export async function buildEngineAuth(port: number, secretB64Url: string): Promi
       JSON.stringify(value) +
       ",u=" +
       JSON.stringify(rootUrl) +
-      ";if(document.cookie.indexOf(n+'=')===-1){document.cookie=n+'='+v+'; path=/; max-age=" +
+      ";var has=document.cookie.indexOf(n+'=')!==-1" +
+      ";var t=(document.body&&document.body.textContent)||''" +
+      ";var unauthorized=t.indexOf('authentication required')!==-1" +
+      ";if(!has||unauthorized){document.cookie=n+'='+v+'; path=/; max-age=" +
       COOKIE_MAX_AGE_SECONDS +
       "';location.replace(u);}}catch(e){}})();";
 
