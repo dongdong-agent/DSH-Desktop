@@ -39,3 +39,16 @@ DSH中文版-v0.1.0/
 # 本地发布留存
 release/
 nul
+
+# 本地工作脚本与排查探针（不入库，用途说明见 OneWork 仓 docs/开发日志.md 2026-09-16 条目）
+# —— `_*` 为一次性探针/临时产物；构建/安装/校验脚本留在本地按需使用
+_*
+.git-msg-*
+commit-*.cmd
+build-release.cmd
+install-release.ps1
+run-install.cmd
+vitest-dsh.cmd
+cargo-check-dsh.cmd
+cargo-check-onework.cmd
+lint-onework.cmd
