@@ -193,6 +193,71 @@ export interface KernelUpdateInfo {
   hasUpdate: boolean;
 }
 
+// ---------- 预发布通道（alpha / next：官方 dist-tags 里的测试版） ----------
+
+/** 完整 registry 文档端点（/latest 只给稳定版；alpha/next 频道要读 dist-tags） */
+const REGISTRY_DOC = "https://registry.npmjs.org/@deepseek-ai/dsh";
+
+/** 测试版候选：version = dist-tags 指向的版本号，channel = 来自哪个预发布频道 */
+export interface PrereleaseInfo {
+  version: string;
+  channel: string;
+}
+
+/** registry 完整文档比 /latest 大得多（含全部版本元数据），TTL 缓存独立维护 */
+let prereleaseCache: { info: PrereleaseInfo | null; ts: number } | null = null;
+
+/** 清除预发布候选缓存（安装测试版成功后调用） */
+export function clearPrereleaseCache(): void {
+  prereleaseCache = null;
+}
+
+/**
+ * 查询预发布通道（npm dist-tags 的 alpha / next）里比当前版本新的测试版内核。
+ *
+ * 为什么不走 /latest：官方把稳定版放 latest（GUI「升级内核」按钮的来源），
+ * 试验版只出现在 alpha / next 标签上——例如 2026-09-17 的 0.1.6-alpha.1
+ * （该版本实测首跑挂死，见托盘「升级测试版内核」的警示文案）。
+ *
+ * 返回 null = 预发布通道没有比 current 新的候选。
+ */
+export async function fetchPrereleaseUpdate(current: string): Promise<PrereleaseInfo | null> {
+  const cur = normalizeDshVersion(current);
+  if (prereleaseCache && Date.now() - prereleaseCache.ts < LATEST_CACHE_TTL_MS) {
+    return prereleaseCache.info;
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REGISTRY_TIMEOUT_MS);
+  let res: Response;
+  try {
+    res = await httpFetch(REGISTRY_DOC, { cache: "no-store", signal: controller.signal });
+  } catch (e) {
+    if (controller.signal.aborted) throw new Error("请求 npm registry 超时，请检查网络后重试", { cause: e });
+    throw e instanceof Error ? e : new Error(String(e), { cause: e });
+  } finally {
+    clearTimeout(timer);
+  }
+  if (!res.ok) throw new Error(`npm registry 响应异常（HTTP ${res.status}）`);
+  const data = (await res.json()) as { "dist-tags"?: Record<string, unknown> };
+  const tags = data["dist-tags"] ?? {};
+  // 只认官方 alpha / next 两个预发布频道（latest 属稳定通道，由 checkForUpdate 负责）
+  const channels: Array<[string, string]> = [
+    ["alpha", typeof tags.alpha === "string" ? tags.alpha : ""],
+    ["next", typeof tags.next === "string" ? tags.next : ""],
+  ];
+  let best: PrereleaseInfo | null = null;
+  for (const [channel, raw] of channels) {
+    if (!raw || !isValidDshVersion(raw)) continue;
+    const v = normalizeDshVersion(raw);
+    // 两个频道可能指向同一版本（取先见者）；且必须比当前版本新
+    if (best && compareVersions(v, best.version) <= 0) continue;
+    if (compareVersions(v, cur) <= 0) continue;
+    best = { version: v, channel };
+  }
+  prereleaseCache = { info: best, ts: Date.now() };
+  return best;
+}
+
 /**
  * 检测是否有新内核：对比当前版本与 registry latest。
  * 当前版本无法识别（未安装 / 探测失败返回 unknown）时直接抛错，由调用方给出明确提示，

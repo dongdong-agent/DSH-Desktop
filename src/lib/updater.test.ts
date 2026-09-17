@@ -37,6 +37,8 @@ import {
   normalizeDshVersion,
   checkForUpdate,
   fetchLatestVersion,
+  fetchPrereleaseUpdate,
+  clearPrereleaseCache,
   installKernel,
   clearLatestVersionCache,
   listInstalledKernels,
@@ -437,5 +439,77 @@ describe("listInstalledKernels / removeKernel", () => {
     // 无尾斜杠的 appDataDir（真实 Tauri 2 行为）→ 不能拼成 ...com.dsh.desktopkernel
     pathMocks.appDataDir.mockResolvedValue("C:\\Users\\demo\\AppData\\Roaming\\com.dsh.desktop");
     expect(await kernelRootDir()).toBe("C:\\Users\\demo\\AppData\\Roaming\\com.dsh.desktop\\kernel");
+  });
+});
+
+// ---------- 预发布通道（alpha / next 测试版内核入口，2026-09-17） ----------
+
+describe("fetchPrereleaseUpdate", () => {
+  /** stub 完整 registry 文档（fetchPrereleaseUpdate 读 dist-tags，不看 version 字段）。
+   * 注意必须 mockImplementation 每次新建 Response——mockResolvedValue 会共享同一实例，
+   * 第二次调用 res.json() 时抛 "body already read"（同一条用例调两次探针时会踩）。 */
+  function stubRegistryDoc(distTags: Record<string, string>) {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(
+        () =>
+          Promise.resolve(
+            new Response(JSON.stringify({ name: "@deepseek-ai/dsh", "dist-tags": distTags }), {
+              status: 200,
+            }),
+          ),
+      ),
+    );
+  }
+
+  beforeEach(() => {
+    clearPrereleaseCache();
+  });
+
+  it("alpha 频道比当前版本新 ⇒ 返回测试版候选（channel=alpha）", async () => {
+    stubRegistryDoc({ latest: "0.1.5-rc.1", alpha: "0.1.6-alpha.1", next: "0.1.5-rc.2" });
+    expect(await fetchPrereleaseUpdate("0.1.5-rc.1")).toEqual({
+      version: "0.1.6-alpha.1",
+      channel: "alpha",
+    });
+  });
+
+  it("alpha 与 next 都不比当前新 ⇒ 返回 null（无可升级的测试版）", async () => {
+    stubRegistryDoc({ latest: "0.1.5-rc.1", alpha: "0.1.6-alpha.1", next: "0.1.5-rc.2" });
+    expect(await fetchPrereleaseUpdate("0.1.6-alpha.1")).toBeNull();
+  });
+
+  it("next 比 alpha 更新时取 next（channel=next）", async () => {
+    stubRegistryDoc({ latest: "0.1.5-rc.1", alpha: "0.1.6-alpha.1", next: "0.1.6-rc.1" });
+    const pre = await fetchPrereleaseUpdate("0.1.5-rc.1");
+    expect(pre).toEqual({ version: "0.1.6-rc.1", channel: "next" });
+  });
+
+  it("候选与当前版本相等不算更新（避免重复提示已安装的测试版）", async () => {
+    stubRegistryDoc({ latest: "0.1.5-rc.1", alpha: "0.1.5-rc.2", next: "" });
+    // alpha=0.1.5-rc.2 比 0.1.5-rc.1 新 ⇒ 有候选
+    expect(await fetchPrereleaseUpdate("0.1.5-rc.1")).toEqual({ version: "0.1.5-rc.2", channel: "alpha" });
+    clearPrereleaseCache();
+    // 当前已是 0.1.5-rc.2 ⇒ 无候选
+    expect(await fetchPrereleaseUpdate("0.1.5-rc.2")).toBeNull();
+  });
+
+  it("registry 返回非 200 时抛错", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("err", { status: 500 })));
+    await expect(fetchPrereleaseUpdate("0.1.5-rc.1")).rejects.toThrow(/HTTP 500/);
+  });
+
+  it("TTL 缓存生效：clearPrereleaseCache 后重新请求", async () => {
+    const fetchMock = vi.fn(
+      () =>
+        new Response(JSON.stringify({ "dist-tags": { alpha: "0.1.6-alpha.1" } }), {
+          status: 200,
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    await fetchPrereleaseUpdate("0.1.5-rc.1");
+    clearPrereleaseCache();
+    await fetchPrereleaseUpdate("0.1.5-rc.1");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });

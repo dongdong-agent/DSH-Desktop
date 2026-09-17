@@ -331,12 +331,29 @@ pub fn run() {
             // 引擎运行中窗口显示的是引擎页、壳自己的重启入口不可见，故在这条唯一常驻通道上提供。
             let restart_engine =
                 MenuItem::with_id(app, "restart-engine", "重启引擎", true, None::<&str>)?;
+            // 升级测试版内核：稳定通道的「升级内核」只认 npm latest；alpha/next 频道的
+            // 测试版（如 0.1.6-alpha.1）需要单独入口。导航回壳带 ?prerelease=1 标记，
+            // 前端 TitleBar 挂载时自动运行升级检查并弹出确认（不会静默安装）。
+            let upgrade_prerelease = MenuItem::with_id(
+                app,
+                "upgrade-prerelease",
+                "升级测试版内核（alpha/next 频道）",
+                true,
+                None::<&str>,
+            )?;
             let quit = MenuItem::with_id(app, "quit", "退出（不影响后台引擎）", true, None::<&str>)?;
             let quit_all_item =
                 MenuItem::with_id(app, "quit-all", "完全退出（同时关闭引擎）", true, None::<&str>)?;
             let menu = Menu::with_items(
                 app,
-                &[&show, &manage, &restart_engine, &quit, &quit_all_item],
+                &[
+                    &show,
+                    &manage,
+                    &restart_engine,
+                    &upgrade_prerelease,
+                    &quit,
+                    &quit_all_item,
+                ],
             )?;
 
             TrayIconBuilder::with_id("main-tray")
@@ -394,6 +411,23 @@ pub fn run() {
                                 format!("http://localhost:1422/?{query}")
                             } else {
                                 format!("http://tauri.localhost/?{query}")
+                            };
+                            if let Ok(u) = tauri::Url::parse(&base) {
+                                let _ = w.navigate(u);
+                            }
+                        }
+                    }
+                    // 升级测试版内核：与 manage 相同的回壳导航，另带 ?prerelease=1 标记。
+                    // 前端 TitleBar 挂载时检测到该标记会自动运行升级检查——
+                    // 稳定通道已最新时改查 alpha/next 频道，发现测试版弹确认框（不静默安装）。
+                    "upgrade-prerelease" => {
+                        if let Some(w) = app.get_webview_window("main") {
+                            let _ = w.show();
+                            let _ = w.set_focus();
+                            let base = if cfg!(debug_assertions) {
+                                "http://localhost:1422/?manage=1&prerelease=1".to_string()
+                            } else {
+                                "http://tauri.localhost/?manage=1&prerelease=1".to_string()
                             };
                             if let Ok(u) = tauri::Url::parse(&base) {
                                 let _ = w.navigate(u);

@@ -1,11 +1,11 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import { confirm, message } from "@tauri-apps/plugin-dialog";
 import { Minus, Square, X, RotateCw, KeyRound, Bug, DownloadCloud, Loader2, Maximize2, Minimize2 } from "lucide-react";
 import { useEngineStore } from "../stores/engineStore";
 import { getDshVersion, pinEngineVersion, restartEngine } from "../lib/dshEngine";
-import { checkForUpdate, clearLatestVersionCache, installKernel, isValidDshVersion, type KernelUpdateInfo } from "../lib/updater";
+import { checkForUpdate, clearLatestVersionCache, clearPrereleaseCache, fetchPrereleaseUpdate, installKernel, isValidDshVersion, type KernelUpdateInfo, type PrereleaseInfo } from "../lib/updater";
 
 /** 无边框窗口标题栏（窗口控制统一在右上角，左侧标题 + 引擎状态） */
 export function TitleBar({
@@ -50,10 +50,74 @@ export function TitleBar({
       const info = await checkForUpdate(current);
       setUpdateInfo(info);
       if (!info.hasUpdate) {
-        await message(`当前 dsh ${info.current} 已是最新版本`, {
-          title: "检查更新",
+        // 稳定通道已最新 → 检查预发布通道（alpha / next 频道的测试版内核）
+        let pre: PrereleaseInfo | null = null;
+        try {
+          pre = await fetchPrereleaseUpdate(info.current);
+        } catch {
+          /* registry 异常时回落「已是最新」提示，不打断流程 */
+        }
+        if (!pre) {
+          await message(`当前 dsh ${info.current} 已是最新版本`, {
+            title: "检查更新",
+            kind: "info",
+            okLabel: "知道了",
+          });
+          return;
+        }
+        // 发现测试版：明确警示风险（实测 0.1.6-alpha.1 首跑挂死），用户确认才装
+        const ok = await confirm(
+          `当前稳定版 dsh ${info.current} 已是最新。\n\n` +
+            `发现测试版内核：dsh ${pre.version}（${pre.channel} 频道）\n\n` +
+            "⚠️ 测试版未经官方稳定验证，可能存在缺陷甚至无法启动" +
+            "（实测 0.1.6-alpha.1 首跑挂起，需回滚）。\n" +
+            "旧内核会保留在内核目录中，状态栏可随时一键回滚。\n\n" +
+            "是否安装测试版？",
+          {
+            title: "安装测试版内核",
+            kind: "warning",
+            okLabel: "安装测试版",
+            cancelLabel: "取消",
+          },
+        );
+        if (!ok) return;
+        // 复用稳定版的安装浮层与流程：目标换成测试版版本号
+        setUpdateInfo({ current: info.current, latest: pre.version, hasUpdate: true });
+        setUpdatePhase("installing");
+        setInstallLog([]);
+        setInstallElapsed(0);
+        const t0p = Date.now();
+        installTimerRef.current = window.setInterval(
+          () => setInstallElapsed(Math.round((Date.now() - t0p) / 1000)),
+          1000,
+        );
+        const res = await installKernel(pre.version, (msg) => {
+          setInstallProgress(msg);
+          setInstallLog((prev) => [...prev.slice(-40), msg]);
+        });
+        if (!res.ok) {
+          await message(`测试版安装失败：${res.error ?? "未知错误"}`, {
+            title: "安装测试版内核",
+            kind: "error",
+          });
+          return;
+        }
+        pinEngineVersion(pre.version);
+        try {
+          await restartEngine();
+        } catch {
+          await message("测试版内核已安装完成，但引擎重启失败（错误已显示在状态栏）。可手动点击「重启引擎」按钮重试。", {
+            title: "安装测试版内核",
+            kind: "warning",
+          });
+          return;
+        }
+        clearLatestVersionCache();
+        clearPrereleaseCache();
+        setUpdateInfo(null);
+        await message(`内核已切换到测试版 dsh ${pre.version} ✅\n\n如有异常，状态栏可一键回滚到已验证版本。`, {
+          title: "安装完成",
           kind: "info",
-          okLabel: "知道了",
         });
         return;
       }
@@ -121,6 +185,17 @@ export function TitleBar({
       setInstallProgress("");
     }
   };
+
+  // 托盘「升级测试版内核」导航回壳带 ?prerelease=1：挂载时自动运行升级检查
+  // （流程内含用户确认弹窗，不会静默安装）；触发后立即清掉 URL 标记，避免刷新重复弹。
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search);
+    if (q.get("prerelease") !== "1") return;
+    window.history.replaceState(null, "", window.location.pathname);
+    void handleUpdate();
+    // 只在挂载时响应一次标记；handleUpdate 内部引用的均为稳定的状态 setter
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // 打开 / 关闭 WebView 开发者调试器（F12）
   const toggleDevtools = () => {
