@@ -9,7 +9,7 @@ import { StatusBar } from "./components/StatusBar";
 import { EngineLauncher } from "./components/EngineLauncher";
 import { CloseDialog } from "./components/CloseDialog";
 import { KeyManagerDialog } from "./components/KeyManagerDialog";
-import { findExistingInstance, waitEngineBusinessReady, onEngineHealth, stopEngine, loadVerifiedVersions, restartEngineOnPort, getEnginePort } from "./lib/dshEngine";
+import { findExistingInstanceInfo, waitEngineBusinessReady, onEngineHealth, stopEngine, loadVerifiedVersions, restartEngineOnPort, getEnginePort } from "./lib/dshEngine";
 import { buildEngineAuth, readBrowserSessionSecret } from "./lib/engineAuth";
 import { useZoomShortcuts } from "./hooks/useZoomShortcuts";
 
@@ -177,13 +177,18 @@ export default function App() {
   // 启动时扫描已有 dsh 实例（网页版 3080 等在跑则直接复用，自动进入主界面）
   useEffect(() => {
     void (async () => {
-      const port = await findExistingInstance();
-      if (port !== null) {
+      const found = await findExistingInstanceInfo();
+      if (found !== null) {
         // 端口就绪 ≠ 业务就绪：这条路径绕过 startEngine，而「引擎已在跑、客户端复用」
         // 恰是冷启动故障链（过早导航 → 网页端清空 dsh.sessions.current）的主入口，
         // 必须与 startEngine 的三条出口一样过业务就绪闸门（unavailable/超时自动放行）。
-        await waitEngineBusinessReady(port);
-        setHealth({ status: "running", port, url: `http://127.0.0.1:${port}` });
+        await waitEngineBusinessReady(found.port);
+        setHealth({
+          status: "running",
+          port: found.port,
+          url: `http://127.0.0.1:${found.port}`,
+          owned: found.owned,
+        });
       }
     })();
   }, [setHealth]);

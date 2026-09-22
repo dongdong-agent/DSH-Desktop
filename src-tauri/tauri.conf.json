@@ -23,7 +23,7 @@
         "devtools": true,
         "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,TrackingPrevention",
         "dataDirectory": "webview2-default",
-        "dragDropEnabled": true
+        "dragDropEnabled": false
       }
     ],
     "security": {

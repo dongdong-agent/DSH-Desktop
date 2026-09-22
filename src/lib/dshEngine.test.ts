@@ -60,6 +60,11 @@ import {
   managedCredentialEnv,
   buildEngineArgs,
   probeEngineReady,
+  parsePortOwnerPid,
+  parseEngineInstanceRecord,
+  isOwnedEngineInstance,
+  findExistingInstanceInfo,
+  type EngineInstanceRecord,
 } from "./dshEngine";
 
 const APP_DATA = "C:\\Users\\demo\\AppData\\Roaming\\com.dsh.desktop\\";
@@ -460,7 +465,7 @@ describe("managedCredentialEnv（受管凭据注入引擎子进程环境）", ()
 
 describe("buildEngineArgs（--patch 必须排在 web app 自己的参数之前）", () => {
   it("带覆盖层时 --patch 紧跟 --profile，位于 --port/--host 之前", () => {
-    expect(buildEngineArgs(3080, "C:\\patch\\pin.yml")).toEqual([
+    expect(buildEngineArgs(3080, ["C:\\patch\\pin.yml"])).toEqual([
       "--profile",
       "web",
       "--patch",
@@ -472,8 +477,33 @@ describe("buildEngineArgs（--patch 必须排在 web app 自己的参数之前�
     ]);
   });
 
+  it("多份覆盖层按顺序各带一个 --patch（--patch 是可重复的父级选项）", () => {
+    expect(buildEngineArgs(3080, ["C:\\patch\\pin.yml", "C:\\patch\\guard.yml"])).toEqual([
+      "--profile",
+      "web",
+      "--patch",
+      "C:\\patch\\pin.yml",
+      "--patch",
+      "C:\\patch\\guard.yml",
+      "--port",
+      "3080",
+      "--host",
+      "127.0.0.1",
+    ]);
+  });
+
   it("覆盖层不可用时退化为不带 --patch 的启动参数", () => {
-    expect(buildEngineArgs(3080, null)).toEqual(["--profile", "web", "--port", "3080", "--host", "127.0.0.1"]);
+    expect(buildEngineArgs(3080, [null])).toEqual(["--profile", "web", "--port", "3080", "--host", "127.0.0.1"]);
+    expect(buildEngineArgs(3080, [null, "C:\\patch\\guard.yml"])).toEqual([
+      "--profile",
+      "web",
+      "--patch",
+      "C:\\patch\\guard.yml",
+      "--port",
+      "3080",
+      "--host",
+      "127.0.0.1",
+    ]);
   });
 });
 
@@ -787,5 +817,111 @@ describe("startEngine 的业务就绪闸门（running 出口统一覆盖）", ()
     expect(
       coreMocks.invoke.mock.calls.every((c: unknown[]) => c[0] !== "probe_engine_ready"),
     ).toBe(true);
+  });
+});
+
+// ---------- 引擎实例归属（决定护栏到底在不在场） ----------
+
+const rec = (over: Partial<EngineInstanceRecord> = {}): EngineInstanceRecord => ({
+  spawnedBy: "dsh-desktop",
+  port: 3080,
+  pid: 33836,
+  guardApplied: true,
+  startedAt: 1,
+  ...over,
+});
+
+describe("parsePortOwnerPid", () => {
+  it("按本地地址列的端口精确比对：:30801 不会被当成 :3080", () => {
+    const out = [
+      "  Proto  Local Address         Foreign Address      State       PID",
+      "  TCP    0.0.0.0:30801         0.0.0.0:0            LISTENING   9999",
+      "  TCP    127.0.0.1:3080        0.0.0.0:0            LISTENING   33836",
+    ].join("\r\n");
+    expect(parsePortOwnerPid(out, 3080)).toBe(33836);
+  });
+
+  it("IPv6 监听行与 ESTABLISHED 行：只认 LISTENING，端口取本地地址列", () => {
+    const out = [
+      "  TCP    [::1]:17800           [::1]:52341          ESTABLISHED 111",
+      "  TCP    [::]:17800            [::]:0               LISTENING   1716",
+    ].join("\r\n");
+    expect(parsePortOwnerPid(out, 17800)).toBe(1716);
+  });
+
+  it("端口没人监听 / 输出为空 → null", () => {
+    expect(parsePortOwnerPid("  TCP    127.0.0.1:3080   0.0.0.0:0   LISTENING   1", 17800)).toBeNull();
+    expect(parsePortOwnerPid("", 17800)).toBeNull();
+  });
+});
+
+describe("parseEngineInstanceRecord", () => {
+  it("本壳写的记录正常解析", () => {
+    expect(parseEngineInstanceRecord(JSON.stringify(rec()))).toEqual(rec());
+  });
+  it("损坏 JSON / 不是本壳写的 / 缺端口 → null", () => {
+    expect(parseEngineInstanceRecord("{")).toBeNull();
+    expect(parseEngineInstanceRecord(JSON.stringify({ ...rec(), spawnedBy: "someone-else" }))).toBeNull();
+    expect(parseEngineInstanceRecord(JSON.stringify({ spawnedBy: "dsh-desktop" }))).toBeNull();
+  });
+});
+
+describe("isOwnedEngineInstance", () => {
+  it("端口与 PID 都对得上才算自家实例", () => {
+    expect(isOwnedEngineInstance(rec(), 3080, 33836)).toBe(true);
+  });
+  it("同端口但 PID 已换人（我们的实例退出、外部进程抢占）→ 判外部实例", () => {
+    expect(isOwnedEngineInstance(rec(), 3080, 44444)).toBe(false);
+  });
+  it("无记录 / 记录指向别的端口 → 外部实例", () => {
+    expect(isOwnedEngineInstance(null, 3080, 33836)).toBe(false);
+    expect(isOwnedEngineInstance(rec({ port: 17800 }), 3080, 33836)).toBe(false);
+  });
+  it("netstat 拿不到 PID（浏览器环境）时退回按端口判定，不误报", () => {
+    expect(isOwnedEngineInstance(rec(), 3080, null)).toBe(true);
+  });
+});
+
+describe("findExistingInstanceInfo", () => {
+  /** 3080 上是外部实例（另一家桌面版），没有本壳的登记记录 */
+  const stubForeign3080 = () => {
+    httpMocks.tauriFetch.mockImplementation((url: string) =>
+      url.includes(":3080")
+        ? Promise.resolve({ status: 200, ok: true, text: () => Promise.resolve("__DSH_BOOT__") })
+        : Promise.reject(new Error("没人监听")),
+    );
+    shellMocks.create.mockImplementation(() => ({
+      execute: async () => ({ stdout: "  TCP    127.0.0.1:3080   0.0.0.0:0   LISTENING   33836\r\n" }),
+    }));
+  };
+
+  it("复用外部实例时 owned=false —— 护栏不在场，UI 不得报「护栏生效中」", async () => {
+    stubForeign3080();
+    expect(await findExistingInstanceInfo()).toEqual({ port: 3080, owned: false, guardApplied: false });
+  });
+
+  it("登记记录能对上端口占用者时判为自家实例", async () => {
+    stubForeign3080();
+    fsMocks.readTextFile.mockImplementation((p: string) =>
+      String(p).endsWith("engine-instance.json")
+        ? Promise.resolve(JSON.stringify(rec()))
+        : Promise.reject(new Error("不存在")),
+    );
+    expect(await findExistingInstanceInfo()).toEqual({ port: 3080, owned: true, guardApplied: true });
+  });
+
+  it("自家实例但那次 spawn 没写成护栏覆盖层 → guardApplied=false", async () => {
+    stubForeign3080();
+    fsMocks.readTextFile.mockImplementation((p: string) =>
+      String(p).endsWith("engine-instance.json")
+        ? Promise.resolve(JSON.stringify(rec({ guardApplied: false })))
+        : Promise.reject(new Error("不存在")),
+    );
+    expect(await findExistingInstanceInfo()).toEqual({ port: 3080, owned: true, guardApplied: false });
+  });
+
+  it("一个实例都没有 → null", async () => {
+    httpMocks.tauriFetch.mockRejectedValue(new Error("没人监听"));
+    expect(await findExistingInstanceInfo()).toBeNull();
   });
 });

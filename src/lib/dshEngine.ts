@@ -17,7 +17,11 @@ import { invoke } from "@tauri-apps/api/core";
 import { appDataDir, homeDir } from "@tauri-apps/api/path";
 import { compareVersions, kernelRootDir, normalizeDshVersion, runCommand } from "./updater";
 import { readCredentials } from "./credentials";
-import { ensureEnginePatchFile } from "./enginePatch";
+import {
+  ensureEnginePatchFile,
+  ensureOfficialBillingGuardPatch,
+  readOfficialBillingAllowed,
+} from "./enginePatch";
 import { buildEngineAuth, readBrowserSessionSecret } from "./engineAuth";
 import type { EngineHealth } from "./types";
 
@@ -508,6 +512,152 @@ export async function findExistingInstance(): Promise<number | null> {
 }
 
 /**
+ * 从 netstat -ano 输出里取「监听指定端口的进程 PID」。
+ * 按本地地址列的端口号精确比对——旧实现用 `line.includes(':3080')`，会命中 :30801。
+ */
+export function parsePortOwnerPid(netstatStdout: string, port: number): number | null {
+  for (const line of netstatStdout.split(/\r?\n/)) {
+    const cols = line.trim().split(/\s+/);
+    if (cols.length < 5 || !/LISTENING/i.test(line)) continue;
+    const local = cols[1];
+    const idx = local.lastIndexOf(":");
+    if (idx < 0 || Number(local.slice(idx + 1)) !== port) continue;
+    const pid = Number(cols[cols.length - 1]);
+    if (Number.isFinite(pid) && pid > 0) return pid;
+  }
+  return null;
+}
+
+/** 查端口占用者 PID；netstat 不可用（浏览器环境）时返回 null */
+async function getPortOwnerPid(port: number): Promise<number | null> {
+  try {
+    const out = await Command.create("netstat", ["-ano"]).execute();
+    return parsePortOwnerPid(out.stdout || "", port);
+  } catch {
+    return null;
+  }
+}
+
+/** 本壳拉起引擎实例的登记文件名（%APPDATA%\com.dsh.desktop 下） */
+export const INSTANCE_RECORD_FILENAME = "engine-instance.json";
+/** 登记记录里本壳的身份标记 */
+export const INSTANCE_OWNER_TAG = "dsh-desktop";
+
+export interface EngineInstanceRecord {
+  spawnedBy: string;
+  port: number;
+  pid: number | null;
+  /** 本次 spawn 是否带上了官方计费护栏覆盖层 */
+  guardApplied: boolean;
+  startedAt: number;
+}
+
+/** 登记记录损坏/不是本壳写的 → null */
+export function parseEngineInstanceRecord(raw: string): EngineInstanceRecord | null {
+  try {
+    const o = JSON.parse(raw);
+    if (!o || typeof o !== "object") return null;
+    if (o.spawnedBy !== INSTANCE_OWNER_TAG || typeof o.port !== "number") return null;
+    return {
+      spawnedBy: INSTANCE_OWNER_TAG,
+      port: o.port,
+      pid: typeof o.pid === "number" ? o.pid : null,
+      guardApplied: o.guardApplied === true,
+      startedAt: typeof o.startedAt === "number" ? o.startedAt : 0,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 端口上的实例是不是本壳拉起的。
+ *
+ * 必须连 PID 一起判：登记记录只说明"我们曾在 X 端口起过 pid=Y"，若 Y 已退出而**别的**
+ * 程序（例如另一家桌面版的 3080 实例）占上了同一端口，只比端口就会把它误判成自己的，
+ * 护栏状态随之报假话。netstat 查不到 PID 时（浏览器环境/命令失败）退回按端口判定。
+ */
+export function isOwnedEngineInstance(
+  rec: EngineInstanceRecord | null,
+  port: number,
+  ownerPid: number | null,
+): boolean {
+  if (!rec || rec.spawnedBy !== INSTANCE_OWNER_TAG || rec.port !== port) return false;
+  if (ownerPid === null || rec.pid === null) return true;
+  return rec.pid === ownerPid;
+}
+
+export async function readEngineInstanceRecord(): Promise<EngineInstanceRecord | null> {
+  try {
+    const dir = await appDataDir();
+    return parseEngineInstanceRecord(
+      await readTextFile(`${dir.replace(/[\\/]+$/, "")}\\${INSTANCE_RECORD_FILENAME}`),
+    );
+  } catch {
+    return null;
+  }
+}
+
+async function writeEngineInstanceRecord(rec: EngineInstanceRecord): Promise<void> {
+  try {
+    const dir = await appDataDir();
+    await writeTextFile(
+      `${dir.replace(/[\\/]+$/, "")}\\${INSTANCE_RECORD_FILENAME}`,
+      JSON.stringify(rec, null, 2),
+    );
+  } catch {
+    /* 登记失败只影响"复用外部实例时能不能报出真实护栏状态"，不该阻断启动 */
+  }
+}
+
+/** 复用探测的结果：端口 + 是不是本壳的实例 + 那次 spawn 有没有带护栏 */
+export interface ExistingInstanceInfo {
+  port: number;
+  owned: boolean;
+  guardApplied: boolean;
+}
+
+/**
+ * 扫描到已有实例时同时判归属。
+ *
+ * 为什么归属和护栏有关：护栏是**本壳 spawn 引擎时注入 --patch**实现的，复用外部实例
+ * （另一家桌面版 / 用户命令行起的 dsh）走的是那份内核自己的装配，护栏根本不在场，
+ * 而 KNOWN_DHS_PORTS 是复用优先且 3080 排第一——不判归属就会在"以为有护栏"的状态下
+ * 让联网搜索继续静默扣官方余额。
+ */
+export async function findExistingInstanceInfo(): Promise<ExistingInstanceInfo | null> {
+  const port = await findExistingInstance();
+  if (port === null) return null;
+  const [rec, ownerPid] = await Promise.all([readEngineInstanceRecord(), getPortOwnerPid(port)]);
+  const owned = isOwnedEngineInstance(rec, port, ownerPid);
+  return { port, owned, guardApplied: owned && rec?.guardApplied === true };
+}
+
+/**
+ * 护栏的**实际**状态：开关想不想拦（配置）× 当前在跑的实例归不归我们管（事实）。
+ * 两者不等价——开关是关的（护栏生效）但实例是外部的，等于没护栏。
+ */
+export async function engineGuardStatus(): Promise<{
+  /** 用户开关：true = 知情放行官方搜索计费 */
+  allowOfficial: boolean;
+  /** 当前在跑的实例由本壳拉起（外部实例 / 没有实例时为 false） */
+  instanceOwned: boolean;
+  /** 本壳 spawn 该实例时是否真的带上了护栏覆盖层 */
+  guardApplied: boolean;
+  port: number | null;
+}> {
+  const allowOfficial = await readOfficialBillingAllowed();
+  const found = await findExistingInstanceInfo();
+  if (found === null) return { allowOfficial, instanceOwned: false, guardApplied: false, port: null };
+  return {
+    allowOfficial,
+    instanceOwned: found.owned,
+    guardApplied: found.guardApplied,
+    port: found.port,
+  };
+}
+
+/**
  * 业务就绪探针结果：
  * - `ready`：会话索引可查询（引擎业务已加载）
  * - `not-ready`：端口在应答，但业务查询未成功（未就绪 / 判据随引擎版本失效）
@@ -650,18 +800,20 @@ export async function getDshVersion(): Promise<string> {
 /**
  * 组装引擎启动参数。
  * @param port 监听端口
- * @param patchPath 覆盖层绝对路径（null 表示不带覆盖层）
+ * @param patchPaths 覆盖层绝对路径列表（按顺序应用；null 表示该层本次不可用，会被跳过）
  * @returns argv 数组
  *
  * 顺序有语义：`--patch` 是 dsh 的**父级**选项，`--port/--host` 属于 web app
  * 自己的参数（commander 的 passThroughOptions 会把它们之后的内容原样转交），
- * 因此父级选项必须排在前面。
+ * 因此父级选项必须排在前面。`--patch` 本身可重复（bin.js 用 collect 收集），
+ * 多份覆盖层按传入先后叠加应用。
  */
-export function buildEngineArgs(port: number, patchPath: string | null): string[] {
+export function buildEngineArgs(port: number, patchPaths: (string | null)[]): string[] {
+  const patches = patchPaths.filter((p): p is string => p !== null);
   return [
     "--profile",
     "web",
-    ...(patchPath === null ? [] : ["--patch", patchPath]),
+    ...patches.flatMap((p) => ["--patch", p]),
     "--port",
     String(port),
     "--host",
@@ -705,14 +857,20 @@ async function killProcessTree(pid: number | undefined): Promise<void> {
  */
 export async function startEngine(preferredPort = DEFAULT_PORT, force = false): Promise<EngineHealth> {
   if (!force) {
-    // 1. 扫描并复用已有实例（用户网页版正在跑的端口优先）
-    const existing = await findExistingInstance();
+    // 1. 扫描并复用已有实例（用户网页版正在跑的端口优先）。归属一并判出来：
+    //    复用外部实例时护栏不在场，UI 必须报真话（见 findExistingInstanceInfo 注释）。
+    const existing = await findExistingInstanceInfo();
     if (existing !== null) {
-      currentPort = existing;
+      currentPort = existing.port;
       // 端口就绪 ≠ 业务就绪：被复用的实例同样可能是刚冷启动的（如开机后被其它途径先拉起），
       // 过早导航会触发「会话指针被清空」的冷启动故障链（见 waitEngineBusinessReady 注释）。
       await waitEngineBusinessReady(currentPort);
-      const h: EngineHealth = { status: "running", port: currentPort, url: `http://127.0.0.1:${currentPort}` };
+      const h: EngineHealth = {
+        status: "running",
+        port: currentPort,
+        url: `http://127.0.0.1:${currentPort}`,
+        owned: existing.owned,
+      };
       emit(h);
       return h;
     }
@@ -721,7 +879,13 @@ export async function startEngine(preferredPort = DEFAULT_PORT, force = false): 
     if (await probePort(preferredPort, 800)) {
       currentPort = preferredPort;
       await waitEngineBusinessReady(currentPort);
-      const h: EngineHealth = { status: "running", port: currentPort, url: `http://127.0.0.1:${currentPort}` };
+      const rec = await readEngineInstanceRecord();
+      const h: EngineHealth = {
+        status: "running",
+        port: currentPort,
+        url: `http://127.0.0.1:${currentPort}`,
+        owned: isOwnedEngineInstance(rec, currentPort, await getPortOwnerPid(currentPort)),
+      };
       emit(h);
       return h;
     }
@@ -737,11 +901,15 @@ export async function startEngine(preferredPort = DEFAULT_PORT, force = false): 
   // 界面表现为「所有候选命令均无法启动」。（幂等、只删死进程持有的锁，见 clearStaleProfileLocks）
   await clearStaleProfileLocks();
 
-  // 启动覆盖层：把工作区目录选择固定为应用内 browse 选择器（原生选择框没有
+  // 启动覆盖层 1：把工作区目录选择固定为应用内 browse 选择器（原生选择框没有
   // owner 窗口，宽屏上会跑到应用窗口之外且不置顶）。写盘失败则退化为无覆盖层。
   const patchPath = await ensureEnginePatchFile();
   if (patchPath === null) diag("覆盖层写入失败，按无覆盖层启动（目录选择回退为原生选择框）");
-  const args = buildEngineArgs(port, patchPath);
+  // 启动覆盖层 2：官方 DeepSeek 计费护栏（默认摘掉写死官方端点的联网搜索后端，
+  // 否则「对话走套餐、搜索扣官方余额」会静默发生）。见 enginePatch.ts 的取证注释。
+  const guardPath = await ensureOfficialBillingGuardPatch();
+  diag("计费护栏覆盖层:", guardPath ?? "写入失败（本次不启用护栏）");
+  const args = buildEngineArgs(port, [patchPath, guardPath]);
   // 候选命令共用同一份凭据环境：受管存储有值即写真值（见 MANAGED_CREDENTIAL_KEYS）
   const managedEnv = await managedCredentialEnv();
 
@@ -793,7 +961,20 @@ export async function startEngine(preferredPort = DEFAULT_PORT, force = false): 
         if (await probePort(port, 600)) {
           // 端口已应答：这里恰恰是旧实现「提前导航」的故障点——业务（会话索引）往往还差最后一截
           await waitEngineBusinessReady(port);
-          const h: EngineHealth = { status: "running", port, url: `http://127.0.0.1:${port}` };
+          // 登记"这个端口上的 pid 是我们拉起的"：之后复用探测据此区分自家实例与外部实例
+          await writeEngineInstanceRecord({
+            spawnedBy: INSTANCE_OWNER_TAG,
+            port,
+            pid: child?.pid ?? null,
+            guardApplied: guardPath !== null,
+            startedAt: Date.now(),
+          });
+          const h: EngineHealth = {
+            status: "running",
+            port,
+            url: `http://127.0.0.1:${port}`,
+            owned: true,
+          };
           emit(h);
           return h;
         }
@@ -852,20 +1033,13 @@ export async function stopEngine(): Promise<void> {
  * taskkill 参数是 Windows 原样（Tauri Command 不经过 MSYS，/F 不会被转义破坏）。
  */
 async function killPortOwner(port: number): Promise<void> {
-  try {
-    const out = await Command.create("netstat", ["-ano"]).execute();
-    const lines = (out.stdout || "").split(/\r?\n/);
-    const line = lines.find((l) => l.includes(`:${port}`) && l.includes("LISTENING"));
-    const pid = line?.trim().split(/\s+/).pop();
-    if (pid && pid !== "0") {
-      try {
-        await Command.create("taskkill", ["/PID", pid, "/F"]).execute();
-      } catch {
-        /* 进程可能已退出 */
-      }
+  const pid = await getPortOwnerPid(port);
+  if (pid !== null) {
+    try {
+      await Command.create("taskkill", ["/PID", String(pid), "/F"]).execute();
+    } catch {
+      /* 进程可能已退出 */
     }
-  } catch {
-    /* netstat 不可用（浏览器环境）→ 放弃强杀，仅依赖 child.kill */
   }
   const deadline = Date.now() + 6000;
   while (Date.now() < deadline) {

@@ -14,4 +14,9 @@ export interface EngineHealth {
   url: string;
   version?: string;
   error?: string;
+  /**
+   * 该实例是否由本壳拉起（复用外部实例时为 false）。
+   * 决定启动覆盖层在不在场，例如官方 DeepSeek 计费护栏——外部实例没有它。
+   */
+  owned?: boolean;
 }

@@ -3,6 +3,9 @@
   "identifier": "default",
   "description": "DSH Desktop 主窗口能力",
   "windows": ["main"],
+  "remote": {
+    "urls": ["http://127.0.0.1:*/"]
+  },
   "permissions": [
     "core:default",
     "core:window:allow-minimize",

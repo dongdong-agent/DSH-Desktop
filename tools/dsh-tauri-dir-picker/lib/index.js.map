@@ -1,0 +1,7 @@
+{
+  "version": 3,
+  "sources": ["../src/index.ts"],
+  "sourcesContent": ["/**\n * dsh-tauri-dir-picker host\uFF1A\u7EAF\u6302\u8F7D\u70B9\u3002\n *\n * \u76EE\u5F55\u5217\u4E3E/\u521B\u5EFA\u7684\u6570\u636E\u9762\u7531 cordis.patch.yml \u63D2\u5165\u7684 browse \u5BBF\u4E3B\u540E\u7AEF\u627F\u62C5\uFF0C\n * \u539F\u751F\u9009\u62E9\u6846\u8D70\u7684\u662F\u684C\u9762\u58F3\uFF08Tauri\uFF09\u7684 IPC\uFF0C\u4E0D\u7ECF\u8FC7\u5F15\u64CE\u5BBF\u4E3B\u3002\u672C\u5305\u5BBF\u4E3B\u534A\n * \u6CA1\u6709\u9700\u8981\u6CE8\u518C\u7684\u670D\u52A1\uFF0C\u5B58\u5728\u7684\u610F\u4E49\u662F\u8BA9 bundle \u7684 main \u5165\u53E3\u5408\u6CD5\u3002\n */\nimport type { Context } from '@deepseek-ai/cordis'\n\nexport const name = 'dsh-tauri-dir-picker'\n\nexport function apply(_ctx: Context): void {}\n"],
+  "mappings": ";AASO,IAAM,OAAO;AAEb,SAAS,MAAM,MAAqB;AAAC;",
+  "names": []
+}

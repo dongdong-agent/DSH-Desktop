@@ -1,0 +1,15 @@
+# 目录选择覆盖层（随本 bundle 一起应用）：
+#  1. 关掉自适应选择器（auto）——其原生半用 Win32 IFileOpenDialog 且 Show(null) 无
+#     owner 窗口，宽屏/多显示器上选择框会跑到应用窗口之外且不置顶（2026-09-12 实测）；
+#  2. 宿主半挂 browse 后端：客户端回落对话框（外部浏览器场景）依赖
+#     directoryPicker/list 与 directoryPicker/createDirectory；
+#  3. 客户端半由本包的 ./client 承担（Tauri 原生选择框 + browse 回落）。
+#     directoryFlow 两个洞都是 single 占用，不得再挂
+#     @deepseek-ai/dsh-client-ui-directory-picker-browse（会与本包重复占用报错）。
+- id: directory-picker
+  disabled: true
+- insert:
+    - id: directory-picker-browse
+      name: '@deepseek-ai/dsh-host-directory-picker-browse'
+    - id: dsh-tauri-dir-picker
+      name: dsh-tauri-dir-picker
